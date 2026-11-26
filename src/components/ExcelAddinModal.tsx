@@ -259,27 +259,35 @@ export function ExcelAddinModal({
                 {vbaOs === 'windows' ? (
                   <div className="space-y-2.5 text-slate-600 leading-relaxed">
                     <div>
-                      <strong className="text-slate-800">Option A — One-Click Windows Builder:</strong>{' '}
-                      Download both <code className="font-mono text-slate-800">StatSheet_SPSS.bas</code> and{' '}
-                      <code className="font-mono text-slate-800">Build_StatSheet_xlam.ps1</code> into the same folder, right-click the <code className="font-mono">.ps1</code> file → <strong>Run with PowerShell</strong>. It compiles and enables <code className="font-mono">StatSheet_SPSS.xlam</code> automatically.
+                      <strong className="text-slate-800">Option A — One-Click Windows Builder (includes Ribbon Tab):</strong>{' '}
+                      Close Excel, download both <code className="font-mono text-slate-800">StatSheet_SPSS.bas</code> and{' '}
+                      <code className="font-mono text-slate-800">Build_StatSheet_xlam.ps1</code> into the same folder, right-click the <code className="font-mono">.ps1</code> file → <strong>Run with PowerShell</strong>. It compiles <code className="font-mono">StatSheet_SPSS.xlam</code> with the native <strong>SPSS View</strong> Ribbon tab automatically.
                     </div>
                     <div>
-                      <strong className="text-slate-800">Option B — Manual 30-Second Import (no Trust Center changes):</strong>
+                      <strong className="text-slate-800">Option B — Manual 30-Second Import:</strong>
                       <ol className="list-decimal pl-5 mt-1 space-y-1">
                         <li>Open a blank workbook in Excel and press <code className="font-mono text-slate-800">Alt + F11</code> to open the VBA Editor.</li>
                         <li>Click <strong>File → Import File…</strong> and choose <code className="font-mono text-slate-800">StatSheet_SPSS.bas</code>.</li>
-                        <li>Close the VBA Editor, then press <code className="font-mono text-slate-800">F12</code> (Save As) and set Save as type to <strong>Excel Add-in (*.xlam)</strong> (Excel automatically selects <code className="font-mono">%APPDATA%\Microsoft\AddIns</code>).</li>
-                        <li>Enable it via <strong>File → Options → Add-ins → Manage: Excel Add-ins → Go…</strong> and check <strong>StatSheet_SPSS</strong>.</li>
+                        <li>Close the VBA Editor, press <code className="font-mono text-slate-800">F12</code> (Save As), and set Save as type to <strong>Excel Add-in (*.xlam)</strong>.</li>
+                        <li>Enable it via <strong>File → Options → Add-ins → Manage: Excel Add-ins → Go…</strong>, check <strong>StatSheet_SPSS</strong>, then restart Excel.</li>
                       </ol>
+                    </div>
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-700">
+                      <strong>Where to find it in Excel:</strong> Look for the <strong>SPSS View</strong> tab on the top Ribbon (if built with Option A or Ribbon XML), <strong>right-click any cell → StatSheet SPSS</strong>, open the <strong>Add-ins</strong> Ribbon tab, or press <code className="font-mono">Ctrl+Shift+L</code> / <code className="font-mono">Ctrl+Shift+V</code>.
                     </div>
                   </div>
                 ) : (
-                  <ol className="list-decimal pl-5 space-y-1.5 text-slate-600 leading-relaxed">
-                    <li>Open a blank workbook in Excel for Mac and press <code className="font-mono text-slate-800">Option + F11</code> (or <strong>Tools → Macro → Visual Basic Editor</strong>).</li>
-                    <li>Click <strong>File → Import File…</strong> and select <code className="font-mono text-slate-800">StatSheet_SPSS.bas</code>.</li>
-                    <li>Return to Excel, choose <strong>File → Save As…</strong>, and change File Format to <strong>Excel Add-in (.xlam)</strong>.</li>
-                    <li>Enable it under <strong>Tools → Excel Add-ins…</strong>, then use <strong>Add-ins → StatSheet SPSS</strong> or <code className="font-mono">Ctrl+Shift+L</code> / <code className="font-mono">Ctrl+Shift+V</code>.</li>
-                  </ol>
+                  <div className="space-y-2.5 text-slate-600 leading-relaxed">
+                    <ol className="list-decimal pl-5 space-y-1.5">
+                      <li>Open a blank workbook in Excel for Mac and press <code className="font-mono text-slate-800">Option + F11</code> (or <strong>Tools → Macro → Visual Basic Editor</strong>).</li>
+                      <li>Click <strong>File → Import File…</strong> and select <code className="font-mono text-slate-800">StatSheet_SPSS.bas</code>.</li>
+                      <li>Return to Excel, choose <strong>File → Save As…</strong>, and change File Format to <strong>Excel Add-in (.xlam)</strong>.</li>
+                      <li>Enable it under <strong>Tools → Excel Add-ins…</strong>, then restart Excel.</li>
+                    </ol>
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-700">
+                      <strong>Where to find it in Excel:</strong> <strong>Right-click any cell → StatSheet SPSS</strong>, check the <strong>Add-ins</strong> tab, or press <code className="font-mono">Ctrl+Shift+L</code> / <code className="font-mono">Ctrl+Shift+V</code>.
+                    </div>
+                  </div>
                 )}
               </div>
             </>

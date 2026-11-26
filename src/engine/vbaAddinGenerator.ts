@@ -18,6 +18,7 @@ Public Sub Auto_Open()
     Application.OnKey "^+L", "ToggleValueLabels"
     Application.OnKey "^+V", "SwitchDataAndVariableView"
     CreateLegacyMenu
+    CreateCellContextMenu
     On Error GoTo 0
 End Sub
 
@@ -26,6 +27,7 @@ Public Sub Auto_Close()
     Application.OnKey "^+L"
     Application.OnKey "^+V"
     RemoveLegacyMenu
+    RemoveCellContextMenu
     On Error GoTo 0
 End Sub
 
@@ -117,6 +119,59 @@ Private Sub RemoveLegacyMenu()
     If cb Is Nothing Then Exit Sub
     For Each ctrl In cb.Controls
         If ctrl.Tag = "StatSheetSPSSMenu" Then ctrl.Delete
+    Next ctrl
+    On Error GoTo 0
+End Sub
+
+Private Sub CreateCellContextMenu()
+    Dim cb As CommandBar
+    Dim subMenu As CommandBarPopup
+    Dim btn As CommandBarButton
+
+    On Error Resume Next
+    Set cb = Application.CommandBars("Cell")
+    If cb Is Nothing Then Exit Sub
+
+    RemoveCellContextMenu
+    Set subMenu = cb.Controls.Add(Type:=msoControlPopup, Temporary:=True)
+    subMenu.Caption = "StatSheet SPSS"
+    subMenu.Tag = "StatSheetCellMenu"
+    subMenu.BeginGroup = True
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Toggle Value Labels (1 <-> A)"
+    btn.OnAction = "ToggleValueLabels"
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Switch Data / Variable View"
+    btn.OnAction = "SwitchDataAndVariableView"
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Sync / Initialize Variable View"
+    btn.OnAction = "InitOrSyncVariableView"
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Edit Value Labels..."
+    btn.OnAction = "EditValueLabelsForSelection"
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Validate Rules & Flag Missing"
+    btn.OnAction = "ValidateAndFlagMissing"
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Descriptives & Frequencies"
+    btn.OnAction = "GenerateDescriptivesForSelection"
+    On Error GoTo 0
+End Sub
+
+Private Sub RemoveCellContextMenu()
+    Dim cb As CommandBar
+    Dim ctrl As CommandBarControl
+    On Error Resume Next
+    Set cb = Application.CommandBars("Cell")
+    If cb Is Nothing Then Exit Sub
+    For Each ctrl In cb.Controls
+        If ctrl.Tag = "StatSheetCellMenu" Then ctrl.Delete
     Next ctrl
     On Error GoTo 0
 End Sub
@@ -1041,10 +1096,13 @@ End Function
 }
 
 export function generateWindowsXlamBuilderScript(): string {
+  const ribbonXml = generateCustomUiRibbonXml().replace(/'/g, "''");
   return `# ============================================================================
 # StatSheet SPSS Excel Add-in (.xlam) Automated Builder for Windows
-# Builds StatSheet_SPSS.xlam directly into your Excel AddIns folder.
-# Usage: Put StatSheet_SPSS.bas in the same folder, right-click -> Run with PowerShell
+# Builds StatSheet_SPSS.xlam WITH a native "SPSS View" Ribbon Tab directly
+# into your Excel AddIns folder.
+# Usage: Close Excel, put StatSheet_SPSS.bas in the same folder,
+#        right-click this .ps1 file -> Run with PowerShell
 # ============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -1062,6 +1120,7 @@ if (-not (Test-Path $addInsDir)) {
 }
 $xlamPath = Join-Path $addInsDir "StatSheet_SPSS.xlam"
 
+# 1. Build .xlam with VBA module via Excel COM
 $excel = $null
 try {
     $excel = New-Object -ComObject Excel.Application
@@ -1085,28 +1144,74 @@ try {
     # 55 = xlOpenXMLAddIn (.xlam)
     $wb.SaveAs($xlamPath, 55)
     $wb.Close($false)
-
-    # Register add-in in Excel Add-ins manager
-    $addin = $excel.AddIns.Add($xlamPath, $true)
-    $addin.Installed = $true
-
-    Write-Host ""
-    Write-Host "SUCCESS! Installed offline add-in at:" -ForegroundColor Green
-    Write-Host "  $xlamPath" -ForegroundColor Cyan
-    Write-Host "Open Desktop Excel and use Add-ins -> StatSheet SPSS (or Ctrl+Shift+L / Ctrl+Shift+V)." -ForegroundColor Green
 }
 finally {
     if ($excel -ne $null) {
         $excel.Quit()
         [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
+        $excel = $null
     }
 }
+
+# 2. Embed native "SPSS View" Ribbon Tab (customUI14.xml) into the .xlam zip
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$ribbonXml = '${ribbonXml}'
+
+$zip = [System.IO.Compression.ZipFile]::Open($xlamPath, [System.IO.Compression.ZipArchiveMode]::Update)
+try {
+    $existingCustomUi = $zip.GetEntry("customUI/customUI14.xml")
+    if ($existingCustomUi -ne $null) { $existingCustomUi.Delete() }
+    $customUiEntry = $zip.CreateEntry("customUI/customUI14.xml")
+    $writer = New-Object System.IO.StreamWriter($customUiEntry.Open(), (New-Object System.Text.UTF8Encoding($false)))
+    $writer.Write($ribbonXml)
+    $writer.Dispose()
+
+    $relsEntry = $zip.GetEntry("_rels/.rels")
+    if ($relsEntry -ne $null) {
+        $reader = New-Object System.IO.StreamReader($relsEntry.Open())
+        $relsXml = $reader.ReadToEnd()
+        $reader.Dispose()
+
+        $relTag = '<Relationship Id="StatSheetRibbon" Type="http://schemas.microsoft.com/office/2007/relationships/ui/extensibility" Target="customUI/customUI14.xml"/>'
+        if ($relsXml -notmatch "customUI/customUI14.xml") {
+            $relsXml = $relsXml -replace "</Relationships>", "$relTag</Relationships>"
+            $relsEntry.Delete()
+            $newRels = $zip.CreateEntry("_rels/.rels")
+            $relsWriter = New-Object System.IO.StreamWriter($newRels.Open(), (New-Object System.Text.UTF8Encoding($false)))
+            $relsWriter.Write($relsXml)
+            $relsWriter.Dispose()
+        }
+    }
+}
+finally {
+    $zip.Dispose()
+}
+
+# 3. Register and enable the add-in in Excel
+$excel2 = $null
+try {
+    $excel2 = New-Object -ComObject Excel.Application
+    $excel2.Visible = $false
+    $excel2.DisplayAlerts = $false
+    $addin = $excel2.AddIns.Add($xlamPath, $true)
+    $addin.Installed = $true
+}
+finally {
+    if ($excel2 -ne $null) {
+        $excel2.Quit()
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel2) | Out-Null
+    }
+}
+
+Write-Host ""
+Write-Host "SUCCESS! Installed offline add-in with native 'SPSS View' Ribbon tab at:" -ForegroundColor Green
+Write-Host "  $xlamPath" -ForegroundColor Cyan
+Write-Host "Open Desktop Excel and look for the 'SPSS View' tab on the top Ribbon (or right-click any cell -> StatSheet SPSS)." -ForegroundColor Green
 `;
 }
 
 export function generateCustomUiRibbonXml(): string {
-  return `<!-- Optional Ribbon Tab XML for Custom UI Editor / Office RibbonX Editor -->
-<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+  return `<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
   <ribbon>
     <tabs>
       <tab id="StatSheetTab" label="SPSS View">
@@ -1114,12 +1219,12 @@ export function generateCustomUiRibbonXml(): string {
           <button id="btnToggleLabels"
                   label="Value Labels (1↔A)"
                   size="large"
-                  imageMso="RecordsToggleFilter"
+                  imageMso="OutlineShowDetail"
                   onAction="Ribbon_ToggleValueLabels" />
           <button id="btnSwitchView"
                   label="Data / Variable View"
                   size="large"
-                  imageMso="TableProperties"
+                  imageMso="SwitchWindows"
                   onAction="Ribbon_SwitchView" />
           <button id="btnSyncVars"
                   label="Sync Variable View"
@@ -1131,12 +1236,12 @@ export function generateCustomUiRibbonXml(): string {
           <button id="btnEditLabels"
                   label="Edit Value Labels"
                   size="normal"
-                  imageMso="PropertySheet"
+                  imageMso="Properties"
                   onAction="Ribbon_EditLabels" />
           <button id="btnValidate"
                   label="Validate &amp; Missing"
                   size="normal"
-                  imageMso="DataValidationCircleInvalid"
+                  imageMso="DataValidation"
                   onAction="Ribbon_Validate" />
           <button id="btnDescriptives"
                   label="Descriptives &amp; Freq"
@@ -1146,7 +1251,7 @@ export function generateCustomUiRibbonXml(): string {
           <button id="btnExportJson"
                   label="Export Codebook"
                   size="normal"
-                  imageMso="ExportSharePointList"
+                  imageMso="FileSaveAs"
                   onAction="Ribbon_ExportJson" />
         </group>
       </tab>
