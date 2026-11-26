@@ -9,8 +9,10 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import {
+  formatClassBinsSummary,
   formatMissingSummary,
   formatValueLabelsSummary,
+  isNumericType,
   validateVariableName,
 } from '../engine/spssEngine';
 import type {
@@ -38,6 +40,7 @@ interface VariableViewGridProps {
   onDeleteVariable: (variableId: string) => void;
   onOpenValueLabels: (variableId: string) => void;
   onOpenMissingModal: (variableId: string) => void;
+  onOpenClassBins: (variableId: string) => void;
   onOpenStats: (variableId: string) => void;
 }
 
@@ -85,6 +88,7 @@ export function VariableViewGrid({
   onDeleteVariable,
   onOpenValueLabels,
   onOpenMissingModal,
+  onOpenClassBins,
   onOpenStats,
 }: VariableViewGridProps) {
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
@@ -187,6 +191,9 @@ export function VariableViewGrid({
                 </th>
                 <th className="w-40 min-w-40 border-r border-slate-300 px-2.5 py-2.5 text-left">
                   Missing &amp; Rules
+                </th>
+                <th className="w-36 min-w-36 border-r border-slate-300 px-2.5 py-2.5 text-left">
+                  Class Bins
                 </th>
                 <th className="w-22 min-w-22 border-r border-slate-300 px-2.5 py-2.5 text-right">
                   Columns
@@ -379,6 +386,35 @@ export function VariableViewGrid({
                           <MoreHorizontal className="w-3 h-3" />
                         </span>
                       </button>
+                    </td>
+
+                    {/* Class Boundaries */}
+                    <td className="border-r border-slate-200 px-2 py-1">
+                      {isNumericType(variable.type) ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenClassBins(variable.id)}
+                          className="w-full flex items-center justify-between gap-2 px-2 py-1 text-xs text-left rounded border border-transparent hover:border-slate-300 hover:bg-white transition-colors cursor-pointer"
+                          title="Define Class Boundaries for Grouped Frequency Distribution"
+                        >
+                          <span
+                            className={`truncate font-mono tabular-nums ${
+                              variable.classBins?.enabled
+                                ? 'text-blue-700 font-medium'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {formatClassBinsSummary(variable.classBins)}
+                          </span>
+                          <span className="inline-flex items-center justify-center w-5 h-5 bg-slate-100 border border-slate-300 rounded text-slate-600 shrink-0">
+                            <MoreHorizontal className="w-3 h-3" />
+                          </span>
+                        </button>
+                      ) : (
+                        <span className="px-2 py-1 text-xs text-slate-400 block">
+                          N/A
+                        </span>
+                      )}
                     </td>
 
                     {/* 8. Columns (px display width) */}

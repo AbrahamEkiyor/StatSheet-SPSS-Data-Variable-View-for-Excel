@@ -180,6 +180,7 @@ export function exportDatasetToXlsx(
     Measure: v.measure,
     Role: v.role,
     ValidationJSON: JSON.stringify(v.validation ?? {}),
+    ClassBinsJSON: v.classBins ? JSON.stringify(v.classBins) : '',
   }));
   const metaSheet = XLSX.utils.json_to_sheet(metaRows);
   XLSX.utils.book_append_sheet(wb, metaSheet, METADATA_SHEET_NAME);
@@ -290,6 +291,9 @@ export async function importWorkbookFile(file: File): Promise<DatasetState> {
           role: (item.Role as VariableDefinition['role']) || 'input',
           validation: item.ValidationJSON
             ? JSON.parse(String(item.ValidationJSON))
+            : undefined,
+          classBins: item.ClassBinsJSON
+            ? JSON.parse(String(item.ClassBinsJSON))
             : undefined,
         });
       } catch {

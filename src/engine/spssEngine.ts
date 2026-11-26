@@ -1,9 +1,12 @@
 import type {
   CellIssue,
   CellValue,
+  ClassBinSpec,
+  ClassInterval,
   CodebookDocument,
   DataRow,
   DatasetState,
+  EndpointInclusionRule,
   FrequencyRow,
   MissingValueSpec,
   VariableDefinition,
@@ -430,6 +433,409 @@ export function computeVariableStats(
   };
 }
 
+export function getValidNumericValues(
+  variable: VariableDefinition,
+  rows: DataRow[]
+): number[] {
+  const vals: number[] = [];
+  if (!isNumericType(variable.type)) return vals;
+  for (const row of rows) {
+    const val = row.values[variable.name];
+    if (isSystemMissing(val) || isUserMissing(val, variable.missingValues)) {
+      continue;
+    }
+    const num = Number(val);
+    if (!Number.isNaN(num)) {
+      vals.push(num);
+    }
+  }
+  return vals;
+}
+
+function niceStep(rawStep: number): number {
+  if (rawStep <= 0 || !Number.isFinite(rawStep)) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const frac = rawStep / pow;
+  let niceFrac = 10;
+  if (frac <= 1) niceFrac = 1;
+  else if (frac <= 2) niceFrac = 2;
+  else if (frac <= 2.5) niceFrac = 2.5;
+  else if (frac <= 5) niceFrac = 5;
+  return niceFrac * pow;
+}
+
+export function formatBoundaryNumber(
+  num: number,
+  variable?: VariableDefinition
+): string {
+  const rounded = Math.round(num * 1e6) / 1e6;
+  if (variable?.type === 'dollar') {
+    return `$${rounded.toLocaleString('en-US')}`;
+  }
+  if (variable?.type === 'custom_currency') {
+    return `€${rounded.toLocaleString('en-US')}`;
+  }
+  if (variable?.type === 'comma') {
+    return rounded.toLocaleString('en-US');
+  }
+  return Number.isInteger(rounded)
+    ? rounded.toLocaleString('en-US')
+    : String(rounded);
+}
+
+export function buildIntervalLabel(
+  lower: number | null,
+  upper: number | null,
+  endpointRule: EndpointInclusionRule,
+  isFirstFinite: boolean,
+  isLastFinite: boolean,
+  variable?: VariableDefinition
+): string {
+  if (lower === null && upper !== null) {
+    const op = endpointRule === 'lower_inclusive' ? '<' : '≤';
+    return `${op} ${formatBoundaryNumber(upper, variable)}`;
+  }
+  if (lower !== null && upper === null) {
+    const op = endpointRule === 'lower_inclusive' ? '≥' : '>';
+    return `${op} ${formatBoundaryNumber(lower, variable)}`;
+  }
+  if (lower === null && upper === null) {
+    return 'All Values';
+  }
+  const lStr = formatBoundaryNumber(lower!, variable);
+  const uStr = formatBoundaryNumber(upper!, variable);
+
+  if (endpointRule === 'lower_inclusive') {
+    return isLastFinite ? `${lStr} – ${uStr}` : `${lStr} – <${uStr}`;
+  }
+  return isFirstFinite ? `${lStr} – ${uStr}` : `>${lStr} – ${uStr}`;
+}
+
+export function generateEqualWidthIntervals(
+  values: number[],
+  options: {
+    mode: 'auto_count' | 'auto_width';
+    binCount?: number;
+    binWidth?: number;
+    startAt?: number;
+    endpointRule: EndpointInclusionRule;
+    niceRound?: boolean;
+    variable?: VariableDefinition;
+  }
+): { intervals: ClassInterval[]; resolvedWidth: number; resolvedStart: number } {
+  const minVal = values.length > 0 ? Math.min(...values) : 0;
+  const maxVal = values.length > 0 ? Math.max(...values) : 100;
+  const span = maxVal > minVal ? maxVal - minVal : 10;
+
+  let width = 10;
+  let start = options.startAt !== undefined && !Number.isNaN(options.startAt)
+    ? options.startAt
+    : minVal;
+  let count = 5;
+
+  if (options.mode === 'auto_count') {
+    count = Math.max(2, Math.min(30, Math.round(options.binCount || 5)));
+    const rawStep = span / count;
+    width = options.niceRound ? niceStep(rawStep) : rawStep;
+    if (options.niceRound && options.startAt === undefined) {
+      start = Math.floor(minVal / width) * width;
+    }
+    // Expand count if nice rounding caused top edge < maxVal
+    while (start + width * count < maxVal && count < 30) {
+      count += 1;
+    }
+  } else {
+    width = options.binWidth && options.binWidth > 0 ? options.binWidth : niceStep(span / 5);
+    if (options.niceRound && options.startAt === undefined) {
+      start = Math.floor(minVal / width) * width;
+    }
+    const effectiveSpan = Math.max(width, maxVal - start);
+    count = Math.max(1, Math.min(30, Math.ceil(effectiveSpan / width)));
+    if (start + width * count <= maxVal && options.endpointRule === 'lower_inclusive') {
+      // Closed last bin handles maxVal == upper cleanly
+    }
+  }
+
+  const intervals: ClassInterval[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const lower = Math.round((start + i * width) * 1e6) / 1e6;
+    const upper = Math.round((start + (i + 1) * width) * 1e6) / 1e6;
+    intervals.push({
+      id: `bin_${i + 1}_${Date.now()}`,
+      lower,
+      upper,
+      label: buildIntervalLabel(
+        lower,
+        upper,
+        options.endpointRule,
+        i === 0,
+        i === count - 1,
+        options.variable
+      ),
+    });
+  }
+
+  return { intervals, resolvedWidth: width, resolvedStart: start };
+}
+
+export function validateClassIntervals(
+  intervals: ClassInterval[]
+): string[] {
+  const errors: string[] = [];
+  if (intervals.length === 0) {
+    errors.push('Add at least one class interval.');
+    return errors;
+  }
+
+  intervals.forEach((bin, idx) => {
+    if (bin.lower === null && idx > 0) {
+      errors.push(`Interval ${idx + 1}: Open lower bound (−∞) is only valid on the first row.`);
+    }
+    if (bin.upper === null && idx < intervals.length - 1) {
+      errors.push(`Interval ${idx + 1}: Open upper bound (+∞) is only valid on the last row.`);
+    }
+    if (bin.lower !== null && bin.upper !== null && bin.lower >= bin.upper) {
+      errors.push(`Interval ${idx + 1}: Lower bound (${bin.lower}) must be less than upper bound (${bin.upper}).`);
+    }
+    if (idx > 0) {
+      const prev = intervals[idx - 1];
+      if (prev.upper !== null && bin.lower !== null) {
+        if (bin.lower < prev.upper) {
+          errors.push(`Interval ${idx + 1} overlaps Interval ${idx} (${bin.lower} < ${prev.upper}).`);
+        } else if (bin.lower > prev.upper) {
+          errors.push(`Gap detected between Interval ${idx} (${prev.upper}) and Interval ${idx + 1} (${bin.lower}).`);
+        }
+      }
+    }
+  });
+
+  return errors;
+}
+
+export function classifyValueIntoInterval(
+  num: number,
+  intervals: ClassInterval[],
+  endpointRule: EndpointInclusionRule
+): number {
+  const hasOpenLower = intervals[0]?.lower === null;
+  const hasOpenUpper = intervals[intervals.length - 1]?.upper === null;
+
+  for (let i = 0; i < intervals.length; i += 1) {
+    const bin = intervals[i];
+    const isFirst = i === 0;
+    const isLast = i === intervals.length - 1;
+
+    if (bin.lower === null && bin.upper !== null) {
+      const matches =
+        endpointRule === 'lower_inclusive' ? num < bin.upper : num <= bin.upper;
+      if (matches) return i;
+      continue;
+    }
+
+    if (bin.lower !== null && bin.upper === null) {
+      const matches =
+        endpointRule === 'lower_inclusive' ? num >= bin.lower : num > bin.lower;
+      if (matches) return i;
+      continue;
+    }
+
+    if (bin.lower !== null && bin.upper !== null) {
+      if (endpointRule === 'lower_inclusive') {
+        const includeUpper = isLast && !hasOpenUpper;
+        if (num >= bin.lower && (includeUpper ? num <= bin.upper : num < bin.upper)) {
+          return i;
+        }
+      } else {
+        const includeLower = isFirst && !hasOpenLower;
+        if ((includeLower ? num >= bin.lower : num > bin.lower) && num <= bin.upper) {
+          return i;
+        }
+      }
+    }
+  }
+  return -1;
+}
+
+export function formatClassBinsSummary(spec?: ClassBinSpec): string {
+  if (!spec || !spec.enabled || spec.intervals.length === 0) return 'None';
+  const rule = spec.endpointRule === 'lower_inclusive' ? '[a, b)' : '(a, b]';
+  return `${spec.intervals.length} bins ${rule}`;
+}
+
+export function computeGroupedVariableStats(
+  variable: VariableDefinition,
+  rows: DataRow[],
+  spec: ClassBinSpec
+): VariableStats {
+  const baseStats = computeVariableStats(variable, rows);
+  const totalN = baseStats.totalN;
+  const validN = baseStats.validN;
+
+  const binCounts = new Array<number>(spec.intervals.length).fill(0);
+  let outOfBoundsCount = 0;
+  const userMissingMap = new Map<string, { rawKey: string; label: string; count: number }>();
+
+  for (const row of rows) {
+    const val = row.values[variable.name];
+    if (isSystemMissing(val)) continue;
+
+    if (isUserMissing(val, variable.missingValues)) {
+      const key = String(val).trim();
+      const lbl = lookupValueLabel(val, variable) ?? key;
+      const prev = userMissingMap.get(key);
+      if (prev) prev.count += 1;
+      else userMissingMap.set(key, { rawKey: key, label: lbl, count: 1 });
+      continue;
+    }
+
+    const num = Number(val);
+    if (Number.isNaN(num)) {
+      outOfBoundsCount += 1;
+      continue;
+    }
+
+    const idx = classifyValueIntoInterval(num, spec.intervals, spec.endpointRule);
+    if (idx >= 0) {
+      binCounts[idx] += 1;
+    } else {
+      outOfBoundsCount += 1;
+    }
+  }
+
+  let runningValidPct = 0;
+  const frequencies: FrequencyRow[] = spec.intervals.map((bin, idx) => {
+    const count = binCounts[idx];
+    const percent = totalN > 0 ? (count / totalN) * 100 : 0;
+    const validPercent = validN > 0 ? (count / validN) * 100 : 0;
+    runningValidPct = Math.min(100, runningValidPct + validPercent);
+    const midpoint =
+      bin.lower !== null && bin.upper !== null
+        ? Math.round(((bin.lower + bin.upper) / 2) * 1e4) / 1e4
+        : null;
+
+    return {
+      rawKey: String(idx + 1),
+      label: bin.label,
+      isMissing: false,
+      count,
+      percent,
+      validPercent,
+      cumulativePercent: runningValidPct,
+      midpoint,
+      intervalId: bin.id,
+    };
+  });
+
+  if (outOfBoundsCount > 0) {
+    const percent = totalN > 0 ? (outOfBoundsCount / totalN) * 100 : 0;
+    const validPercent = validN > 0 ? (outOfBoundsCount / validN) * 100 : 0;
+    runningValidPct = Math.min(100, runningValidPct + validPercent);
+    frequencies.push({
+      rawKey: 'oob',
+      label: 'Outside Defined Boundaries',
+      isMissing: false,
+      count: outOfBoundsCount,
+      percent,
+      validPercent,
+      cumulativePercent: runningValidPct,
+      midpoint: null,
+    });
+  }
+
+  Array.from(userMissingMap.values()).forEach((m) => {
+    frequencies.push({
+      rawKey: m.rawKey,
+      label: m.label,
+      isMissing: true,
+      count: m.count,
+      percent: totalN > 0 ? (m.count / totalN) * 100 : 0,
+      validPercent: null,
+      cumulativePercent: null,
+      midpoint: null,
+    });
+  });
+
+  return {
+    ...baseStats,
+    frequencies,
+  };
+}
+
+export function buildRecodedVariableAndRows(
+  sourceVar: VariableDefinition,
+  targetName: string,
+  spec: ClassBinSpec,
+  rows: DataRow[]
+): { newVariable: VariableDefinition; updatedRows: DataRow[] } {
+  const valueLabels: Record<string, string> = {};
+  spec.intervals.forEach((bin, idx) => {
+    valueLabels[String(idx + 1)] = bin.label;
+  });
+
+  // Preserve user-missing codes & labels on the recoded ordinal variable
+  sourceVar.missingValues.discrete.forEach((code) => {
+    const key = String(code);
+    valueLabels[key] = sourceVar.valueLabels[key] ?? `Missing (${key})`;
+  });
+
+  const newVariable: VariableDefinition = {
+    id: `var_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    name: targetName,
+    type: 'numeric',
+    width: 4,
+    decimals: 0,
+    label: sourceVar.label
+      ? `${sourceVar.label} (Binned)`
+      : `${sourceVar.name} (Binned)`,
+    valueLabels,
+    missingValues: {
+      mode: sourceVar.missingValues.mode,
+      discrete: [...sourceVar.missingValues.discrete],
+      range: sourceVar.missingValues.range
+        ? { ...sourceVar.missingValues.range }
+        : undefined,
+    },
+    columns: 168,
+    align: 'left',
+    measure: 'ordinal',
+    role: sourceVar.role,
+    validation: { restrictToLabels: true },
+  };
+
+  const updatedRows = rows.map((row) => {
+    const raw = row.values[sourceVar.name];
+    let nextVal: CellValue = null;
+
+    if (!isSystemMissing(raw)) {
+      if (isUserMissing(raw, sourceVar.missingValues)) {
+        nextVal = raw;
+      } else {
+        const num = Number(raw);
+        if (!Number.isNaN(num)) {
+          const idx = classifyValueIntoInterval(
+            num,
+            spec.intervals,
+            spec.endpointRule
+          );
+          if (idx >= 0) {
+            nextVal = idx + 1;
+          }
+        }
+      }
+    }
+
+    return {
+      ...row,
+      values: {
+        ...row.values,
+        [targetName]: nextVal,
+      },
+    };
+  });
+
+  return { newVariable, updatedRows };
+}
+
 export function buildCodebookDocument(dataset: DatasetState): CodebookDocument {
   return {
     format: 'statsheet-codebook-v1',
@@ -453,6 +859,7 @@ export function buildDataDictionaryCsv(variables: VariableDefinition[]): string 
     'Measure',
     'Role',
     'Validation Bounds',
+    'Class Boundaries',
   ];
   const lines = [headers.map(escape).join(',')];
 
@@ -464,6 +871,12 @@ export function buildDataDictionaryCsv(variables: VariableDefinition[]): string 
     if (v.validation?.min !== undefined) bounds.push(`Min: ${v.validation.min}`);
     if (v.validation?.max !== undefined) bounds.push(`Max: ${v.validation.max}`);
     if (v.validation?.restrictToLabels) bounds.push('Restrict to Value Labels');
+
+    const binsStr = v.classBins?.enabled
+      ? `${formatClassBinsSummary(v.classBins)}: ${v.classBins.intervals
+          .map((b) => b.label)
+          .join('; ')}`
+      : 'None';
 
     const row = [
       String(idx + 1),
@@ -477,6 +890,7 @@ export function buildDataDictionaryCsv(variables: VariableDefinition[]): string 
       v.measure,
       v.role,
       bounds.join(' | ') || 'None',
+      binsStr,
     ];
     lines.push(row.map(escape).join(','));
   });

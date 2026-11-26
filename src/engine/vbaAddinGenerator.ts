@@ -56,6 +56,14 @@ Public Sub Ribbon_Descriptives(ByVal control As Object)
     GenerateDescriptivesForSelection
 End Sub
 
+Public Sub Ribbon_DefineClassBins(ByVal control As Object)
+    DefineClassBoundariesForSelection
+End Sub
+
+Public Sub Ribbon_RecodeBinned(ByVal control As Object)
+    RecodeVariableFromBins
+End Sub
+
 Public Sub Ribbon_ExportJson(ByVal control As Object)
     ExportCodebookJson
 End Sub
@@ -106,8 +114,22 @@ Private Sub CreateLegacyMenu()
     btn.BeginGroup = True
 
     Set btn = menuPopup.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Define Class Boundaries (Scale)..."
+    btn.OnAction = "DefineClassBoundariesForSelection"
+
+    Set btn = menuPopup.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Recode Binned Variable..."
+    btn.OnAction = "RecodeVariableFromBins"
+
+    Set btn = menuPopup.Controls.Add(Type:=msoControlButton, Temporary:=True)
     btn.Caption = "Export Codebook (.json)"
     btn.OnAction = "ExportCodebookJson"
+    btn.BeginGroup = True
+
+    Set btn = menuPopup.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Toggle Pop-up Confirmations (On/Off)"
+    btn.OnAction = "TogglePopupAlerts"
+    btn.BeginGroup = True
     On Error GoTo 0
 End Sub
 
@@ -161,6 +183,19 @@ Private Sub CreateCellContextMenu()
     Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
     btn.Caption = "Descriptives & Frequencies"
     btn.OnAction = "GenerateDescriptivesForSelection"
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Define Class Boundaries..."
+    btn.OnAction = "DefineClassBoundariesForSelection"
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Recode Binned Variable..."
+    btn.OnAction = "RecodeVariableFromBins"
+
+    Set btn = subMenu.Controls.Add(Type:=msoControlButton, Temporary:=True)
+    btn.Caption = "Toggle Pop-up Confirmations"
+    btn.OnAction = "TogglePopupAlerts"
+    btn.BeginGroup = True
     On Error GoTo 0
 End Sub
 
@@ -237,14 +272,16 @@ Public Sub InitOrSyncVariableView()
                 varWs.Cells(nextRow, 12).Value = ""
                 varWs.Cells(nextRow, 13).Value = ""
                 varWs.Cells(nextRow, 14).Value = "No"
+                varWs.Cells(nextRow, 15).Value = ""
             End If
         End If
     Next col
 
     ApplyVariableViewDropdowns varWs
-    varWs.Columns("A:N").AutoFit
+    varWs.Columns("A:O").AutoFit
     varWs.Columns(5).ColumnWidth = 28
     varWs.Columns(6).ColumnWidth = 34
+    varWs.Columns(15).ColumnWidth = 28
 
     MsgBox "Variable_View synchronized with '" & dataWs.Name & "' (" & lastCol & " columns).", vbInformation, "StatSheet SPSS"
 
@@ -366,7 +403,7 @@ Public Sub ToggleValueLabels()
 
         SaveState wb, "LABELS", dataWs.Name
         Application.StatusBar = "StatSheet: Value Labels ON (" & swappedCount & " cells displayed as labels; raw codes backed up)"
-        MsgBox "Value Labels: ON" & vbCrLf & swappedCount & " cells switched to labels. Original raw codes preserved in hidden backup.", vbInformation, "StatSheet SPSS"
+        NotifyToggleResult "Value Labels: ON", swappedCount & " cells switched to labels. Original raw codes preserved in hidden backup."
     Else
         ' ---- LABELS -> RAW (Bidirectional safe restore) ----
         swappedCount = 0
@@ -404,7 +441,7 @@ Public Sub ToggleValueLabels()
 
         SaveState wb, "RAW", dataWs.Name
         Application.StatusBar = "StatSheet: Value Labels OFF (Raw codes restored)"
-        MsgBox "Value Labels: OFF" & vbCrLf & swappedCount & " cells restored to raw numeric/text codes.", vbInformation, "StatSheet SPSS"
+        NotifyToggleResult "Value Labels: OFF", swappedCount & " cells restored to raw numeric/text codes."
     End If
 
     GoTo Cleanup
@@ -415,6 +452,32 @@ ErrHandler:
 Cleanup:
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
+End Sub
+
+Public Sub TogglePopupAlerts()
+    Dim suppressed As String
+    suppressed = GetSetting("StatSheetSPSS", "Preferences", "SuppressTogglePopup", "0")
+    If suppressed = "1" Then
+        SaveSetting "StatSheetSPSS", "Preferences", "SuppressTogglePopup", "0"
+        MsgBox "Value Labels toggle confirmation pop-ups are now ON.", vbInformation, "StatSheet SPSS"
+    Else
+        SaveSetting "StatSheetSPSS", "Preferences", "SuppressTogglePopup", "1"
+        MsgBox "Value Labels toggle confirmation pop-ups are now OFF (status still updates in Excel's bottom status bar).", vbInformation, "StatSheet SPSS"
+    End If
+End Sub
+
+Private Sub NotifyToggleResult(ByVal titleLine As String, ByVal detailLine As String)
+    If GetSetting("StatSheetSPSS", "Preferences", "SuppressTogglePopup", "0") = "1" Then Exit Sub
+    Dim ans As VbMsgBoxResult
+    ans = MsgBox( _
+        titleLine & vbCrLf & detailLine & vbCrLf & vbCrLf & _
+        "Show this confirmation pop-up again next time?" & vbCrLf & _
+        "(Click No to turn it off — status still updates in Excel's bottom bar.)", _
+        vbYesNo + vbInformation + vbDefaultButton1, _
+        "StatSheet SPSS")
+    If ans = vbNo Then
+        SaveSetting "StatSheetSPSS", "Preferences", "SuppressTogglePopup", "1"
+    End If
 End Sub
 
 ' ============================================================================
@@ -567,15 +630,247 @@ Public Sub ClearValidationHighlights()
 End Sub
 
 ' ============================================================================
-' 6. Quick Descriptives & Frequencies Output Sheet
+' 6. Class Boundaries Definition & Grouped Descriptives / Recode
 ' ============================================================================
+Public Sub DefineClassBoundariesForSelection()
+    Dim wb As Workbook
+    Dim varWs As Worksheet
+    Dim dataWs As Worksheet
+    Dim varName As String
+    Dim varRow As Long
+    Dim currentSpec As String
+    Dim rawSpec As String
+    Dim ruleAns As VbMsgBoxResult
+    Dim endpointTag As String
+
+    Set wb = ActiveWorkbook
+    If wb Is Nothing Then Exit Sub
+    If Not SheetExists(wb, VAR_SHEET) Then InitOrSyncVariableView
+    Set varWs = wb.Worksheets(VAR_SHEET)
+
+    If ActiveSheet.Name = VAR_SHEET Then
+        varRow = ActiveCell.Row
+        If varRow < 2 Then
+            MsgBox "Select a variable row in Variable_View.", vbInformation, "StatSheet SPSS"
+            Exit Sub
+        End If
+        varName = Trim$(CStr(varWs.Cells(varRow, 1).Value))
+    Else
+        Set dataWs = ResolveDataWorksheet(wb)
+        If dataWs Is Nothing Then Exit Sub
+        varName = Trim$(CStr(dataWs.Cells(1, ActiveCell.Column).Value))
+        varRow = FindVariableRow(varWs, varName)
+    End If
+
+    If varRow = 0 Or varName = "" Then
+        MsgBox "Select a valid numeric/scale variable column or Variable_View row.", vbExclamation, "StatSheet SPSS"
+        Exit Sub
+    End If
+
+    currentSpec = Trim$(CStr(varWs.Cells(varRow, 15).Value))
+    rawSpec = InputBox( _
+        "Define Class Boundaries for '" & varName & "'" & vbCrLf & vbCrLf & _
+        "Options:" & vbCrLf & _
+        "  AUTO:5               -> 5 equal-width bins (from valid min/max)" & vbCrLf & _
+        "  WIDTH:25000          -> Fixed bin width (optional: WIDTH:25000@75000)" & vbCrLf & _
+        "  0-25000; 25000-50000; 50000+  -> Custom intervals (add =Label if desired)" & vbCrLf & _
+        "  (Leave blank to clear class boundaries)", _
+        "StatSheet Class Boundaries", _
+        IIf(currentSpec = "", "AUTO:5", StripEndpointTag(currentSpec)))
+
+    If StrPtr(rawSpec) = 0 Then Exit Sub
+    rawSpec = Trim$(rawSpec)
+
+    If rawSpec = "" Then
+        varWs.Cells(varRow, 15).Value = ""
+        MsgBox "Cleared class boundaries for '" & varName & "'.", vbInformation, "StatSheet SPSS"
+        Exit Sub
+    End If
+
+    If InStr(1, UCase$(rawSpec), "|UPPER") > 0 Then
+        endpointTag = "UPPER"
+        rawSpec = StripEndpointTag(rawSpec)
+    ElseIf InStr(1, UCase$(rawSpec), "|LOWER") > 0 Then
+        endpointTag = "LOWER"
+        rawSpec = StripEndpointTag(rawSpec)
+    Else
+        ruleAns = MsgBox( _
+            "Choose endpoint inclusion rule for boundary cutpoints:" & vbCrLf & vbCrLf & _
+            "  Yes = Lower-inclusive [a, b)   (Default; top bin closed)" & vbCrLf & _
+            "  No  = Upper-inclusive (a, b]   (Bottom bin closed)", _
+            vbYesNoCancel + vbQuestion + vbDefaultButton1, _
+            "StatSheet Class Boundaries")
+        If ruleAns = vbCancel Then Exit Sub
+        endpointTag = IIf(ruleAns = vbNo, "UPPER", "LOWER")
+    End If
+
+    varWs.Cells(varRow, 15).Value = rawSpec & "|" & endpointTag
+    MsgBox "Saved class boundaries for '" & varName & "': " & rawSpec & " (" & IIf(endpointTag = "UPPER", "(a, b]", "[a, b)") & ")", vbInformation, "StatSheet SPSS"
+End Sub
+
+Public Sub RecodeVariableFromBins()
+    Dim wb As Workbook
+    Dim dataWs As Worksheet
+    Dim varWs As Worksheet
+    Dim col As Long, lastRow As Long, r As Long
+    Dim varName As String, varRow As Long
+    Dim binsSpec As String, newName As String
+    Dim missingSpec As String, labelsStr As String, varLabel As String
+    Dim codes() As String, lbls() As String, pairCount As Long
+    Dim isLabelsMode As Boolean
+
+    Set wb = ActiveWorkbook
+    If wb Is Nothing Then Exit Sub
+    If Not SheetExists(wb, VAR_SHEET) Then InitOrSyncVariableView
+    Set varWs = wb.Worksheets(VAR_SHEET)
+    Set dataWs = ResolveDataWorksheet(wb)
+    If dataWs Is Nothing Then Exit Sub
+
+    If ActiveSheet.Name = VAR_SHEET Then
+        If ActiveCell.Row < 2 Then Exit Sub
+        varName = Trim$(CStr(varWs.Cells(ActiveCell.Row, 1).Value))
+        col = FindDataColumn(dataWs, varName)
+    Else
+        col = ActiveCell.Column
+        varName = Trim$(CStr(dataWs.Cells(1, col).Value))
+    End If
+
+    If col = 0 Or varName = "" Then
+        MsgBox "Select a scale/numeric variable column first.", vbExclamation, "StatSheet SPSS"
+        Exit Sub
+    End If
+
+    varRow = FindVariableRow(varWs, varName)
+    If varRow = 0 Then Exit Sub
+
+    binsSpec = Trim$(CStr(varWs.Cells(varRow, 15).Value))
+    If binsSpec = "" Then
+        DefineClassBoundariesForSelection
+        binsSpec = Trim$(CStr(varWs.Cells(varRow, 15).Value))
+        If binsSpec = "" Then Exit Sub
+    End If
+
+    newName = InputBox( _
+        "Enter name for the new coded Ordinal variable:" & vbCrLf & _
+        "(Creates integer codes 1..k with matching Value Labels)", _
+        "Recode into Binned Variable", _
+        varName & "_grp")
+    If StrPtr(newName) = 0 Then Exit Sub
+    newName = Trim$(newName)
+    If newName = "" Then Exit Sub
+
+    If FindDataColumn(dataWs, newName) > 0 Then
+        MsgBox "Column '" & newName & "' already exists in '" & dataWs.Name & "'.", vbExclamation, "StatSheet SPSS"
+        Exit Sub
+    End If
+
+    varLabel = CStr(varWs.Cells(varRow, 5).Value)
+    labelsStr = CStr(varWs.Cells(varRow, 6).Value)
+    missingSpec = CStr(varWs.Cells(varRow, 7).Value)
+    ParseValueLabels labelsStr, codes, lbls, pairCount
+    isLabelsMode = (GetDisplayMode(wb) = "LABELS")
+
+    lastRow = dataWs.Cells(dataWs.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 2 Then Exit Sub
+
+    Dim numVals() As Double, numCount As Long
+    ReDim numVals(1 To lastRow - 1)
+    For r = 2 To lastRow
+        Dim rv As String
+        rv = Trim$(CStr(dataWs.Cells(r, col).Value))
+        If rv <> "" Then
+            If isLabelsMode And pairCount > 0 Then
+                Dim rev As String
+                rev = LookupCodeByLabel(rv, codes, lbls, pairCount)
+                If rev <> "" Then rv = rev
+            End If
+            If Not MatchesMissingSpec(rv, missingSpec) And IsNumeric(rv) Then
+                numCount = numCount + 1
+                numVals(numCount) = CDbl(rv)
+            End If
+        End If
+    Next r
+
+    Dim hasL() As Boolean, binL() As Double, hasU() As Boolean, binU() As Double
+    Dim binLbl() As String, binCnt As Long, epRule As String
+    If numCount > 0 Then ReDim Preserve numVals(1 To numCount)
+
+    If Not ResolveClassBins(binsSpec, numVals, numCount, hasL, binL, hasU, binU, binLbl, binCnt, epRule) Then
+        MsgBox "Could not parse class boundaries '" & binsSpec & "'.", vbExclamation, "StatSheet SPSS"
+        Exit Sub
+    End If
+
+    Application.ScreenUpdating = False
+    dataWs.Columns(col + 1).Insert Shift:=xlToRight
+    dataWs.Cells(1, col + 1).Value = newName
+    dataWs.Cells(1, col + 1).Font.Bold = True
+
+    Dim recodedCount As Long
+    For r = 2 To lastRow
+        Dim cellStr As String
+        cellStr = Trim$(CStr(dataWs.Cells(r, col).Value))
+        If cellStr <> "" Then
+            If isLabelsMode And pairCount > 0 Then
+                Dim rev2 As String
+                rev2 = LookupCodeByLabel(cellStr, codes, lbls, pairCount)
+                If rev2 <> "" Then cellStr = rev2
+            End If
+            If MatchesMissingSpec(cellStr, missingSpec) Then
+                If IsNumeric(cellStr) Then
+                    dataWs.Cells(r, col + 1).Value = CDbl(cellStr)
+                Else
+                    dataWs.Cells(r, col + 1).Value = cellStr
+                End If
+            ElseIf IsNumeric(cellStr) Then
+                Dim bIdx As Long
+                bIdx = ClassifyIntoBin(CDbl(cellStr), hasL, binL, hasU, binU, binCnt, epRule)
+                If bIdx > 0 Then
+                    dataWs.Cells(r, col + 1).Value = bIdx
+                    recodedCount = recodedCount + 1
+                End If
+            End If
+        End If
+    Next r
+
+    Dim valMap As String, k As Long
+    For k = 1 To binCnt
+        If k > 1 Then valMap = valMap & "; "
+        valMap = valMap & k & "=" & binLbl(k)
+    Next k
+
+    Dim nextVarRow As Long
+    nextVarRow = varWs.Cells(varWs.Rows.Count, 1).End(xlUp).Row + 1
+    If nextVarRow < 2 Then nextVarRow = 2
+    varWs.Cells(nextVarRow, 1).Value = newName
+    varWs.Cells(nextVarRow, 2).Value = "Numeric"
+    varWs.Cells(nextVarRow, 3).Value = 4
+    varWs.Cells(nextVarRow, 4).Value = 0
+    varWs.Cells(nextVarRow, 5).Value = IIf(varLabel <> "", varLabel & " (Binned)", varName & " (Binned)")
+    varWs.Cells(nextVarRow, 6).Value = valMap
+    varWs.Cells(nextVarRow, 7).Value = missingSpec
+    varWs.Cells(nextVarRow, 8).Value = 22
+    varWs.Cells(nextVarRow, 9).Value = "Left"
+    varWs.Cells(nextVarRow, 10).Value = "Ordinal"
+    varWs.Cells(nextVarRow, 11).Value = "Input"
+    varWs.Cells(nextVarRow, 12).Value = ""
+    varWs.Cells(nextVarRow, 13).Value = ""
+    varWs.Cells(nextVarRow, 14).Value = "Yes"
+    varWs.Cells(nextVarRow, 15).Value = ""
+
+    ApplyVariableViewDropdowns varWs
+    dataWs.Columns(col + 1).AutoFit
+    Application.ScreenUpdating = True
+
+    MsgBox "Created ordinal variable '" & newName & "' (" & binCnt & " categories, " & recodedCount & " valid cases recoded).", vbInformation, "StatSheet SPSS"
+End Sub
+
 Public Sub GenerateDescriptivesForSelection()
     Dim wb As Workbook
     Dim dataWs As Worksheet
     Dim varWs As Worksheet
     Dim outWs As Worksheet
     Dim col As Long, lastRow As Long, r As Long
-    Dim varName As String, varLabel As String, missingSpec As String, labelsStr As String
+    Dim varName As String, varLabel As String, missingSpec As String, labelsStr As String, binsSpec As String
     Dim varRow As Long
     Dim codes() As String, lbls() As String, pairCount As Long
     Dim isLabelsMode As Boolean
@@ -606,6 +901,7 @@ Public Sub GenerateDescriptivesForSelection()
         varLabel = CStr(varWs.Cells(varRow, 5).Value)
         labelsStr = CStr(varWs.Cells(varRow, 6).Value)
         missingSpec = CStr(varWs.Cells(varRow, 7).Value)
+        binsSpec = Trim$(CStr(varWs.Cells(varRow, 15).Value))
     End If
     ParseValueLabels labelsStr, codes, lbls, pairCount
     isLabelsMode = (GetDisplayMode(wb) = "LABELS")
@@ -695,30 +991,98 @@ Public Sub GenerateDescriptivesForSelection()
         outWs.Range("A8:E8").Value = Array(Round(meanVal, 3), Round(medVal, 3), Round(sdVal, 3), minVal, maxVal)
     End If
 
-    outWs.Range("A10:F10").Value = Array("Code", "Value Label", "Status", "Frequency", "Percent", "Valid %")
-    outWs.Range("A10:F10").Font.Bold = True
+    Dim hasL() As Boolean, binL() As Double, hasU() As Boolean, binU() As Double
+    Dim binLbl() As String, binCnt As Long, epRule As String
+    Dim outRow As Long, i As Long
 
-    Dim outRow As Long
-    outRow = 11
-    Dim i As Long
-    For i = 1 To freqTotal
-        Dim lbl As String
-        lbl = LookupLabelByCode(freqKeys(i), codes, lbls, pairCount)
-        If lbl = "" Then lbl = freqKeys(i)
-        outWs.Cells(outRow, 1).Value = freqKeys(i)
-        outWs.Cells(outRow, 2).Value = lbl
-        outWs.Cells(outRow, 3).Value = IIf(freqMissing(i), "Missing", "Valid")
-        outWs.Cells(outRow, 4).Value = freqCounts(i)
-        outWs.Cells(outRow, 5).Value = IIf(totalN > 0, Round((freqCounts(i) / totalN) * 100, 1), 0)
-        If Not freqMissing(i) And validN > 0 Then
-            outWs.Cells(outRow, 6).Value = Round((freqCounts(i) / validN) * 100, 1)
-        Else
-            outWs.Cells(outRow, 6).Value = "—"
+    If binsSpec <> "" And numCount > 0 And ResolveClassBins(binsSpec, numVals, numCount, hasL, binL, hasU, binU, binLbl, binCnt, epRule) Then
+        outWs.Range("A2").Value = CStr(outWs.Range("A2").Value) & "  [Grouped " & IIf(epRule = "UPPER", "(a, b]", "[a, b)") & "]"
+        Dim binCounts() As Long, oobCount As Long
+        ReDim binCounts(1 To binCnt)
+        For i = 1 To numCount
+            Dim bIdx As Long
+            bIdx = ClassifyIntoBin(numVals(i), hasL, binL, hasU, binU, binCnt, epRule)
+            If bIdx > 0 Then
+                binCounts(bIdx) = binCounts(bIdx) + 1
+            Else
+                oobCount = oobCount + 1
+            End If
+        Next i
+
+        outWs.Range("A10:G10").Value = Array("Class Interval", "Midpoint", "Status", "Frequency", "Percent", "Valid %", "Cum. %")
+        outWs.Range("A10:G10").Font.Bold = True
+        outRow = 11
+        Dim cumPct As Double, vPct As Double
+        For i = 1 To binCnt
+            vPct = IIf(validN > 0, (binCounts(i) / validN) * 100, 0)
+            cumPct = cumPct + vPct
+            If cumPct > 100 Then cumPct = 100
+            outWs.Cells(outRow, 1).Value = binLbl(i)
+            If hasL(i) And hasU(i) Then
+                outWs.Cells(outRow, 2).Value = Round((binL(i) + binU(i)) / 2, 3)
+            Else
+                outWs.Cells(outRow, 2).Value = "—"
+            End If
+            outWs.Cells(outRow, 3).Value = "Valid"
+            outWs.Cells(outRow, 4).Value = binCounts(i)
+            outWs.Cells(outRow, 5).Value = IIf(totalN > 0, Round((binCounts(i) / totalN) * 100, 1), 0)
+            outWs.Cells(outRow, 6).Value = Round(vPct, 1)
+            outWs.Cells(outRow, 7).Value = Round(cumPct, 1)
+            outRow = outRow + 1
+        Next i
+
+        If oobCount > 0 Then
+            vPct = IIf(validN > 0, (oobCount / validN) * 100, 0)
+            cumPct = cumPct + vPct
+            outWs.Cells(outRow, 1).Value = "Outside Defined Boundaries"
+            outWs.Cells(outRow, 2).Value = "—"
+            outWs.Cells(outRow, 3).Value = "Valid"
+            outWs.Cells(outRow, 4).Value = oobCount
+            outWs.Cells(outRow, 5).Value = IIf(totalN > 0, Round((oobCount / totalN) * 100, 1), 0)
+            outWs.Cells(outRow, 6).Value = Round(vPct, 1)
+            outWs.Cells(outRow, 7).Value = Round(cumPct, 1)
+            outRow = outRow + 1
         End If
-        outRow = outRow + 1
-    Next i
 
-    outWs.Columns("A:F").AutoFit
+        For i = 1 To freqTotal
+            If freqMissing(i) Then
+                Dim mLbl As String
+                mLbl = LookupLabelByCode(freqKeys(i), codes, lbls, pairCount)
+                If mLbl = "" Then mLbl = freqKeys(i)
+                outWs.Cells(outRow, 1).Value = "[" & freqKeys(i) & "] " & mLbl
+                outWs.Cells(outRow, 2).Value = "—"
+                outWs.Cells(outRow, 3).Value = "Missing"
+                outWs.Cells(outRow, 4).Value = freqCounts(i)
+                outWs.Cells(outRow, 5).Value = IIf(totalN > 0, Round((freqCounts(i) / totalN) * 100, 1), 0)
+                outWs.Cells(outRow, 6).Value = "—"
+                outWs.Cells(outRow, 7).Value = "—"
+                outRow = outRow + 1
+            End If
+        Next i
+        outWs.Columns("A:G").AutoFit
+    Else
+        outWs.Range("A10:F10").Value = Array("Code", "Value Label", "Status", "Frequency", "Percent", "Valid %")
+        outWs.Range("A10:F10").Font.Bold = True
+        outRow = 11
+        For i = 1 To freqTotal
+            Dim lbl As String
+            lbl = LookupLabelByCode(freqKeys(i), codes, lbls, pairCount)
+            If lbl = "" Then lbl = freqKeys(i)
+            outWs.Cells(outRow, 1).Value = freqKeys(i)
+            outWs.Cells(outRow, 2).Value = lbl
+            outWs.Cells(outRow, 3).Value = IIf(freqMissing(i), "Missing", "Valid")
+            outWs.Cells(outRow, 4).Value = freqCounts(i)
+            outWs.Cells(outRow, 5).Value = IIf(totalN > 0, Round((freqCounts(i) / totalN) * 100, 1), 0)
+            If Not freqMissing(i) And validN > 0 Then
+                outWs.Cells(outRow, 6).Value = Round((freqCounts(i) / validN) * 100, 1)
+            Else
+                outWs.Cells(outRow, 6).Value = "—"
+            End If
+            outRow = outRow + 1
+        Next i
+        outWs.Columns("A:F").AutoFit
+    End If
+
     outWs.Activate
 End Sub
 
@@ -798,15 +1162,20 @@ Private Function EnsureVariableViewSheet(wb As Workbook) As Worksheet
     Dim ws As Worksheet
     If SheetExists(wb, VAR_SHEET) Then
         Set ws = wb.Worksheets(VAR_SHEET)
+        If Trim$(CStr(ws.Cells(1, 15).Value)) = "" Then
+            ws.Cells(1, 15).Value = "Class_Bins"
+            ws.Cells(1, 15).Font.Bold = True
+            ws.Cells(1, 15).Interior.Color = RGB(241, 245, 249)
+        End If
     Else
         Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
         ws.Name = VAR_SHEET
-        ws.Range("A1:N1").Value = Array( _
+        ws.Range("A1:O1").Value = Array( _
             "Name", "Type", "Width", "Decimals", "Label", "Values", _
             "Missing", "Columns", "Align", "Measure", "Role", _
-            "Val_Min", "Val_Max", "Restrict_Labels")
-        ws.Range("A1:N1").Font.Bold = True
-        ws.Range("A1:N1").Interior.Color = RGB(241, 245, 249)
+            "Val_Min", "Val_Max", "Restrict_Labels", "Class_Bins")
+        ws.Range("A1:O1").Font.Bold = True
+        ws.Range("A1:O1").Interior.Color = RGB(241, 245, 249)
     End If
     Set EnsureVariableViewSheet = ws
 End Function
@@ -1092,6 +1461,205 @@ Private Function ValueLabelsToJson(ByVal spec As String) As String
     Next i
     ValueLabelsToJson = res & "}"
 End Function
+
+Private Function StripEndpointTag(ByVal spec As String) As String
+    Dim p As Long
+    p = InStr(1, UCase$(spec), "|LOWER")
+    If p > 0 Then
+        StripEndpointTag = Trim$(Left$(spec, p - 1))
+        Exit Function
+    End If
+    p = InStr(1, UCase$(spec), "|UPPER")
+    If p > 0 Then
+        StripEndpointTag = Trim$(Left$(spec, p - 1))
+        Exit Function
+    End If
+    StripEndpointTag = Trim$(spec)
+End Function
+
+Private Function ResolveClassBins( _
+    ByVal rawSpec As String, _
+    ByRef numVals() As Double, _
+    ByVal numCount As Long, _
+    ByRef hasL() As Boolean, _
+    ByRef binL() As Double, _
+    ByRef hasU() As Boolean, _
+    ByRef binU() As Double, _
+    ByRef binLbl() As String, _
+    ByRef binCnt As Long, _
+    ByRef epRule As String) As Boolean
+
+    Dim core As String, minV As Double, maxV As Double, spanV As Double
+    Dim i As Long, startV As Double, widthV As Double
+
+    epRule = IIf(InStr(1, UCase$(rawSpec), "|UPPER") > 0, "UPPER", "LOWER")
+    core = StripEndpointTag(rawSpec)
+    If core = "" Then Exit Function
+
+    If numCount > 0 Then
+        minV = Application.WorksheetFunction.Min(numVals)
+        maxV = Application.WorksheetFunction.Max(numVals)
+    Else
+        minV = 0
+        maxV = 100
+    End If
+    spanV = maxV - minV
+    If spanV <= 0 Then spanV = 10
+
+    If Left$(UCase$(core), 5) = "AUTO:" Then
+        binCnt = CLng(Val(Mid$(core, 6)))
+        If binCnt < 2 Then binCnt = 2
+        If binCnt > 30 Then binCnt = 30
+        widthV = spanV / binCnt
+        startV = minV
+        GoTo BuildEqualBins
+    ElseIf Left$(UCase$(core), 6) = "WIDTH:" Then
+        Dim wPart As String, atPos As Long
+        wPart = Mid$(core, 7)
+        atPos = InStr(1, wPart, "@")
+        If atPos > 0 Then
+            widthV = Val(Left$(wPart, atPos - 1))
+            startV = Val(Mid$(wPart, atPos + 1))
+        Else
+            widthV = Val(wPart)
+            startV = minV
+        End If
+        If widthV <= 0 Then Exit Function
+        binCnt = Int(((maxV - startV) / widthV) + 0.999999)
+        If binCnt < 1 Then binCnt = 1
+        If binCnt > 30 Then binCnt = 30
+BuildEqualBins:
+        ReDim hasL(1 To binCnt)
+        ReDim binL(1 To binCnt)
+        ReDim hasU(1 To binCnt)
+        ReDim binU(1 To binCnt)
+        ReDim binLbl(1 To binCnt)
+        For i = 1 To binCnt
+            hasL(i) = True
+            hasU(i) = True
+            binL(i) = Round(startV + (i - 1) * widthV, 4)
+            binU(i) = Round(startV + i * widthV, 4)
+            If epRule = "LOWER" Then
+                binLbl(i) = binL(i) & IIf(i = binCnt, " - " & binU(i), " - <" & binU(i))
+            Else
+                binLbl(i) = IIf(i = 1, binL(i) & " - " & binU(i), ">" & binL(i) & " - " & binU(i))
+            End If
+        Next i
+        ResolveClassBins = True
+        Exit Function
+    End If
+
+    ' Custom semicolon-separated intervals
+    Dim parts() As String, tok As String, customLbl As String, eqPos As Long
+    parts = Split(core, ";")
+    binCnt = 0
+    ReDim hasL(1 To UBound(parts) + 1)
+    ReDim binL(1 To UBound(parts) + 1)
+    ReDim hasU(1 To UBound(parts) + 1)
+    ReDim binU(1 To UBound(parts) + 1)
+    ReDim binLbl(1 To UBound(parts) + 1)
+
+    For i = LBound(parts) To UBound(parts)
+        tok = Trim$(parts(i))
+        If tok <> "" Then
+            customLbl = ""
+            eqPos = InStr(1, tok, "=")
+            If eqPos > 1 Then
+                customLbl = Trim$(Mid$(tok, eqPos + 1))
+                tok = Trim$(Left$(tok, eqPos - 1))
+            End If
+
+            binCnt = binCnt + 1
+            If Left$(tok, 2) = "<=" Or Left$(tok, 1) = "<" Then
+                hasL(binCnt) = False
+                hasU(binCnt) = True
+                binU(binCnt) = Val(Replace(Replace(tok, "<=", ""), "<", ""))
+                binLbl(binCnt) = IIf(customLbl <> "", customLbl, IIf(epRule = "UPPER", "<= " & binU(binCnt), "< " & binU(binCnt)))
+            ElseIf Right$(tok, 1) = "+" Or Left$(tok, 2) = ">=" Or Left$(tok, 1) = ">" Then
+                hasL(binCnt) = True
+                hasU(binCnt) = False
+                binL(binCnt) = Val(Replace(Replace(Replace(tok, "+", ""), ">=", ""), ">", ""))
+                binLbl(binCnt) = IIf(customLbl <> "", customLbl, IIf(epRule = "LOWER", ">= " & binL(binCnt), "> " & binL(binCnt)))
+            Else
+                Dim dashPos As Long
+                dashPos = InStr(2, tok, "-")
+                If dashPos > 1 Then
+                    hasL(binCnt) = True
+                    hasU(binCnt) = True
+                    binL(binCnt) = Val(Trim$(Left$(tok, dashPos - 1)))
+                    binU(binCnt) = Val(Trim$(Mid$(tok, dashPos + 1)))
+                    binLbl(binCnt) = IIf(customLbl <> "", customLbl, binL(binCnt) & " - " & binU(binCnt))
+                Else
+                    binCnt = binCnt - 1
+                End If
+            End If
+        End If
+    Next i
+
+    If binCnt > 0 Then
+        ReDim Preserve hasL(1 To binCnt)
+        ReDim Preserve binL(1 To binCnt)
+        ReDim Preserve hasU(1 To binCnt)
+        ReDim Preserve binU(1 To binCnt)
+        ReDim Preserve binLbl(1 To binCnt)
+        ResolveClassBins = True
+    End If
+End Function
+
+Private Function ClassifyIntoBin( _
+    ByVal v As Double, _
+    ByRef hasL() As Boolean, _
+    ByRef binL() As Double, _
+    ByRef hasU() As Boolean, _
+    ByRef binU() As Double, _
+    ByVal binCnt As Long, _
+    ByVal epRule As String) As Long
+
+    Dim i As Long
+    Dim openLower As Boolean, openUpper As Boolean
+    openLower = Not hasL(1)
+    openUpper = Not hasU(binCnt)
+
+    For i = 1 To binCnt
+        If Not hasL(i) And hasU(i) Then
+            If IIf(epRule = "LOWER", v < binU(i), v <= binU(i)) Then
+                ClassifyIntoBin = i
+                Exit Function
+            End If
+        ElseIf hasL(i) And Not hasU(i) Then
+            If IIf(epRule = "LOWER", v >= binL(i), v > binL(i)) Then
+                ClassifyIntoBin = i
+                Exit Function
+            End If
+        ElseIf hasL(i) And hasU(i) Then
+            If epRule = "LOWER" Then
+                If i = binCnt And Not openUpper Then
+                    If v >= binL(i) And v <= binU(i) Then
+                        ClassifyIntoBin = i
+                        Exit Function
+                    End If
+                Else
+                    If v >= binL(i) And v < binU(i) Then
+                        ClassifyIntoBin = i
+                        Exit Function
+                    End If
+                End If
+            Else
+                If i = 1 And Not openLower Then
+                    If v >= binL(i) And v <= binU(i) Then
+                        ClassifyIntoBin = i
+                        Exit Function
+                    End If
+                Else
+                    If v > binL(i) And v <= binU(i) Then
+                        ClassifyIntoBin = i
+                        Exit Function
+                    End If
+                End If
+            End If
+        End If
+    Next i
+End Function
 `;
 }
 
@@ -1101,112 +1669,136 @@ export function generateWindowsXlamBuilderScript(): string {
 # StatSheet SPSS Excel Add-in (.xlam) Automated Builder for Windows
 # Builds StatSheet_SPSS.xlam WITH a native "SPSS View" Ribbon Tab directly
 # into your Excel AddIns folder.
-# Usage: Close Excel, put StatSheet_SPSS.bas in the same folder,
-#        right-click this .ps1 file -> Run with PowerShell
 # ============================================================================
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $basPath = Join-Path $scriptDir "StatSheet_SPSS.bas"
 
-if (-not (Test-Path $basPath)) {
-    Write-Host "ERROR: StatSheet_SPSS.bas not found in $scriptDir" -ForegroundColor Red
-    exit 1
-}
+Write-Host "=== StatSheet SPSS Offline Excel Add-in Installer ===" -ForegroundColor Cyan
 
-$addInsDir = Join-Path $env:APPDATA "Microsoft\\AddIns"
-if (-not (Test-Path $addInsDir)) {
-    New-Item -ItemType Directory -Path $addInsDir | Out-Null
-}
-$xlamPath = Join-Path $addInsDir "StatSheet_SPSS.xlam"
-
-# 1. Build .xlam with VBA module via Excel COM
-$excel = $null
 try {
-    $excel = New-Object -ComObject Excel.Application
-    $excel.Visible = $false
-    $excel.DisplayAlerts = $false
+    if (-not (Test-Path $basPath)) {
+        throw "StatSheet_SPSS.bas not found in $scriptDir. Put both files in the same folder."
+    }
 
-    $wb = $excel.Workbooks.Add()
-    try {
-        $null = $wb.VBProject.VBComponents.Import($basPath)
-    } catch {
+    $runningExcel = Get-Process -Name "EXCEL" -ErrorAction SilentlyContinue
+    if ($runningExcel) {
         Write-Host ""
-        Write-Host "Excel blocked programmatic VBA access." -ForegroundColor Yellow
-        Write-Host "To allow one-click build, open Excel -> File -> Options -> Trust Center ->" -ForegroundColor Yellow
-        Write-Host "Trust Center Settings -> Macro Settings -> check 'Trust access to the VBA project object model'," -ForegroundColor Yellow
-        Write-Host "then re-run this script (or import StatSheet_SPSS.bas manually via Alt+F11)." -ForegroundColor Yellow
+        Write-Host "Please close all open Microsoft Excel windows first, then press Enter to continue..." -ForegroundColor Yellow
+        Read-Host | Out-Null
+    }
+
+    $addInsDir = Join-Path $env:APPDATA "Microsoft\\AddIns"
+    if (-not (Test-Path $addInsDir)) {
+        New-Item -ItemType Directory -Path $addInsDir | Out-Null
+    }
+    $xlamPath = Join-Path $addInsDir "StatSheet_SPSS.xlam"
+
+    if (Test-Path $xlamPath) {
+        Remove-Item $xlamPath -Force
+    }
+
+    # 1. Build .xlam with VBA module via Excel COM
+    Write-Host "[1/3] Importing StatSheet_SPSS.bas into .xlam..." -ForegroundColor Gray
+    $excel = $null
+    try {
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+
+        $wb = $excel.Workbooks.Add()
+        try {
+            $null = $wb.VBProject.VBComponents.Import($basPath)
+        } catch {
+            $wb.Close($false)
+            throw "Excel blocked VBA import. Open Excel -> File -> Options -> Trust Center -> Trust Center Settings -> Macro Settings -> check 'Trust access to the VBA project object model', close Excel, and re-run this script."
+        }
+
+        $wb.IsAddin = $true
+        # 55 = xlOpenXMLAddIn (.xlam)
+        $wb.SaveAs($xlamPath, 55)
         $wb.Close($false)
-        exit 1
+    }
+    finally {
+        if ($excel -ne $null) {
+            $excel.Quit()
+            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
+            $excel = $null
+        }
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 500
     }
 
-    $wb.IsAddin = $true
-    # 55 = xlOpenXMLAddIn (.xlam)
-    $wb.SaveAs($xlamPath, 55)
-    $wb.Close($false)
-}
-finally {
-    if ($excel -ne $null) {
-        $excel.Quit()
-        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
-        $excel = $null
-    }
-}
+    # 2. Embed native "SPSS View" Ribbon Tab (customUI14.xml) into the .xlam zip
+    Write-Host "[2/3] Embedding 'SPSS View' Ribbon Tab XML..." -ForegroundColor Gray
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $ribbonXml = '${ribbonXml}'
 
-# 2. Embed native "SPSS View" Ribbon Tab (customUI14.xml) into the .xlam zip
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$ribbonXml = '${ribbonXml}'
+    $zip = [System.IO.Compression.ZipFile]::Open($xlamPath, [System.IO.Compression.ZipArchiveMode]::Update)
+    try {
+        $existingCustomUi = $zip.GetEntry("customUI/customUI14.xml")
+        if ($existingCustomUi -ne $null) { $existingCustomUi.Delete() }
+        $customUiEntry = $zip.CreateEntry("customUI/customUI14.xml")
+        $writer = New-Object System.IO.StreamWriter($customUiEntry.Open(), (New-Object System.Text.UTF8Encoding($false)))
+        $writer.Write($ribbonXml)
+        $writer.Dispose()
 
-$zip = [System.IO.Compression.ZipFile]::Open($xlamPath, [System.IO.Compression.ZipArchiveMode]::Update)
-try {
-    $existingCustomUi = $zip.GetEntry("customUI/customUI14.xml")
-    if ($existingCustomUi -ne $null) { $existingCustomUi.Delete() }
-    $customUiEntry = $zip.CreateEntry("customUI/customUI14.xml")
-    $writer = New-Object System.IO.StreamWriter($customUiEntry.Open(), (New-Object System.Text.UTF8Encoding($false)))
-    $writer.Write($ribbonXml)
-    $writer.Dispose()
+        $relsEntry = $zip.GetEntry("_rels/.rels")
+        if ($relsEntry -ne $null) {
+            $reader = New-Object System.IO.StreamReader($relsEntry.Open())
+            $relsXml = $reader.ReadToEnd()
+            $reader.Dispose()
 
-    $relsEntry = $zip.GetEntry("_rels/.rels")
-    if ($relsEntry -ne $null) {
-        $reader = New-Object System.IO.StreamReader($relsEntry.Open())
-        $relsXml = $reader.ReadToEnd()
-        $reader.Dispose()
-
-        $relTag = '<Relationship Id="StatSheetRibbon" Type="http://schemas.microsoft.com/office/2007/relationships/ui/extensibility" Target="customUI/customUI14.xml"/>'
-        if ($relsXml -notmatch "customUI/customUI14.xml") {
-            $relsXml = $relsXml -replace "</Relationships>", "$relTag</Relationships>"
-            $relsEntry.Delete()
-            $newRels = $zip.CreateEntry("_rels/.rels")
-            $relsWriter = New-Object System.IO.StreamWriter($newRels.Open(), (New-Object System.Text.UTF8Encoding($false)))
-            $relsWriter.Write($relsXml)
-            $relsWriter.Dispose()
+            $relTag = '<Relationship Id="StatSheetRibbon" Type="http://schemas.microsoft.com/office/2007/relationships/ui/extensibility" Target="customUI/customUI14.xml"/>'
+            if ($relsXml -notmatch "customUI/customUI14.xml") {
+                $relsXml = $relsXml -replace "</Relationships>", "$relTag</Relationships>"
+                $relsEntry.Delete()
+                $newRels = $zip.CreateEntry("_rels/.rels")
+                $relsWriter = New-Object System.IO.StreamWriter($newRels.Open(), (New-Object System.Text.UTF8Encoding($false)))
+                $relsWriter.Write($relsXml)
+                $relsWriter.Dispose()
+            }
         }
     }
-}
-finally {
-    $zip.Dispose()
-}
-
-# 3. Register and enable the add-in in Excel
-$excel2 = $null
-try {
-    $excel2 = New-Object -ComObject Excel.Application
-    $excel2.Visible = $false
-    $excel2.DisplayAlerts = $false
-    $addin = $excel2.AddIns.Add($xlamPath, $true)
-    $addin.Installed = $true
-}
-finally {
-    if ($excel2 -ne $null) {
-        $excel2.Quit()
-        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel2) | Out-Null
+    finally {
+        $zip.Dispose()
     }
+
+    # 3. Register and enable the add-in in Excel (requires an active workbook in COM!)
+    Write-Host "[3/3] Enabling StatSheet_SPSS.xlam in Excel Add-ins..." -ForegroundColor Gray
+    $excel2 = $null
+    try {
+        $excel2 = New-Object -ComObject Excel.Application
+        $excel2.Visible = $false
+        $excel2.DisplayAlerts = $false
+        $tmpWb = $excel2.Workbooks.Add()
+        $addin = $excel2.AddIns.Add($xlamPath, $false)
+        $addin.Installed = $true
+        $tmpWb.Close($false)
+    }
+    finally {
+        if ($excel2 -ne $null) {
+            $excel2.Quit()
+            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel2) | Out-Null
+        }
+    }
+
+    Write-Host ""
+    Write-Host "SUCCESS! Installed offline add-in at:" -ForegroundColor Green
+    Write-Host "  $xlamPath" -ForegroundColor Cyan
+    Write-Host "Open Excel now -> look for the 'SPSS View' tab on the top Ribbon," -ForegroundColor Green
+    Write-Host "or right-click any cell -> StatSheet SPSS (shortcuts: Ctrl+Shift+L / Ctrl+Shift+V)." -ForegroundColor Green
+}
+catch {
+    Write-Host ""
+    Write-Host "INSTALL FAILED: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 Write-Host ""
-Write-Host "SUCCESS! Installed offline add-in with native 'SPSS View' Ribbon tab at:" -ForegroundColor Green
-Write-Host "  $xlamPath" -ForegroundColor Cyan
-Write-Host "Open Desktop Excel and look for the 'SPSS View' tab on the top Ribbon (or right-click any cell -> StatSheet SPSS)." -ForegroundColor Green
+Read-Host "Press Enter to close this window" | Out-Null
 `;
 }
 
@@ -1217,9 +1809,9 @@ export function generateCustomUiRibbonXml(): string {
       <tab id="StatSheetTab" label="SPSS View">
         <group id="StatSheetDataGroup" label="Views &amp; Labels">
           <button id="btnToggleLabels"
-                  label="Value Labels (1↔A)"
+                  label="Value Labels (1&#x2194;A)"
                   size="large"
-                  imageMso="OutlineShowDetail"
+                  imageMso="Filter"
                   onAction="Ribbon_ToggleValueLabels" />
           <button id="btnSwitchView"
                   label="Data / Variable View"
@@ -1248,6 +1840,16 @@ export function generateCustomUiRibbonXml(): string {
                   size="normal"
                   imageMso="ChartInsert"
                   onAction="Ribbon_Descriptives" />
+          <button id="btnDefineClassBins"
+                  label="Class Boundaries"
+                  size="normal"
+                  imageMso="SortAscending"
+                  onAction="Ribbon_DefineClassBins" />
+          <button id="btnRecodeBinned"
+                  label="Recode to Bins"
+                  size="normal"
+                  imageMso="CalculateNow"
+                  onAction="Ribbon_RecodeBinned" />
           <button id="btnExportJson"
                   label="Export Codebook"
                   size="normal"

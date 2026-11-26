@@ -4,6 +4,7 @@ import { exportDatasetToCsv } from '../bridge/workbookBridge';
 import {
   buildCodebookDocument,
   buildDataDictionaryCsv,
+  formatClassBinsSummary,
   formatMissingSummary,
 } from '../engine/spssEngine';
 import type { CodebookDocument, DatasetState, VariableDefinition } from '../types/spss';
@@ -211,6 +212,7 @@ export function CodebookModal({
                     <th className="px-3 py-2 text-left">Measure</th>
                     <th className="px-3 py-2 text-left">Value Labels</th>
                     <th className="px-3 py-2 text-left">Missing</th>
+                    <th className="px-3 py-2 text-left">Class Bins</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -240,6 +242,15 @@ export function CodebookModal({
                       </td>
                       <td className="px-3 py-2 font-mono text-slate-700 align-top">
                         {formatMissingSummary(v.missingValues)}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-slate-700 align-top">
+                        {v.classBins?.enabled ? (
+                          <span className="text-blue-700">
+                            {formatClassBinsSummary(v.classBins)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">None</span>
+                        )}
                       </td>
                     </tr>
                   ))}

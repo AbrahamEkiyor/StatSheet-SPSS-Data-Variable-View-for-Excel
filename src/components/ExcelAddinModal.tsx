@@ -138,7 +138,7 @@ export function ExcelAddinModal({
                   Pure cross-platform VBA (<code className="font-mono text-slate-800">StatSheet_SPSS.bas</code>) for Windows and macOS Desktop Excel. Requires no internet connection, no web server, and no external libraries.
                 </p>
                 <div className="pt-1 text-[11px] text-slate-600">
-                  Includes: 11-column <code className="font-mono">Variable_View</code> sync · Reversible <code className="font-mono">1↔A</code> Value Labels toggle (<code className="font-mono">Ctrl+Shift+L</code>) with hidden <code className="font-mono">_SPSS_RawBackup</code> · View switcher (<code className="font-mono">Ctrl+Shift+V</code>) · Missing &amp; validation highlighter · Descriptives report · JSON Codebook export.
+                  Includes: 11-column <code className="font-mono">Variable_View</code> sync · Reversible <code className="font-mono">1↔A</code> Value Labels toggle (<code className="font-mono">Ctrl+Shift+L</code>) with hidden <code className="font-mono">_SPSS_RawBackup</code> · View switcher (<code className="font-mono">Ctrl+Shift+V</code>) · Missing &amp; validation highlighter · Scale Class Boundaries, grouped frequencies &amp; Recode into Ordinal · JSON Codebook export.
                 </div>
               </div>
 
@@ -261,7 +261,10 @@ export function ExcelAddinModal({
                     <div>
                       <strong className="text-slate-800">Option A — One-Click Windows Builder (includes Ribbon Tab):</strong>{' '}
                       Close Excel, download both <code className="font-mono text-slate-800">StatSheet_SPSS.bas</code> and{' '}
-                      <code className="font-mono text-slate-800">Build_StatSheet_xlam.ps1</code> into the same folder, right-click the <code className="font-mono">.ps1</code> file → <strong>Run with PowerShell</strong>. It compiles <code className="font-mono">StatSheet_SPSS.xlam</code> with the native <strong>SPSS View</strong> Ribbon tab automatically.
+                      <code className="font-mono text-slate-800">Build_StatSheet_xlam.ps1</code> into the same folder, then open PowerShell in that folder and run:
+                      <pre className="mt-1.5 p-2 bg-slate-900 text-slate-100 rounded font-mono text-[11px] overflow-x-auto">
+                        powershell -ExecutionPolicy Bypass -File .\Build_StatSheet_xlam.ps1
+                      </pre>
                     </div>
                     <div>
                       <strong className="text-slate-800">Option B — Manual 30-Second Import:</strong>
@@ -272,8 +275,13 @@ export function ExcelAddinModal({
                         <li>Enable it via <strong>File → Options → Add-ins → Manage: Excel Add-ins → Go…</strong>, check <strong>StatSheet_SPSS</strong>, then restart Excel.</li>
                       </ol>
                     </div>
-                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-700">
-                      <strong>Where to find it in Excel:</strong> Look for the <strong>SPSS View</strong> tab on the top Ribbon (if built with Option A or Ribbon XML), <strong>right-click any cell → StatSheet SPSS</strong>, open the <strong>Add-ins</strong> Ribbon tab, or press <code className="font-mono">Ctrl+Shift+L</code> / <code className="font-mono">Ctrl+Shift+V</code>.
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-700 space-y-1">
+                      <div>
+                        <strong>Where to find it in Excel:</strong> Look for the <strong>SPSS View</strong> tab on the top Ribbon (from Option A), <strong>right-click any cell → StatSheet SPSS</strong>, open the <strong>Add-ins</strong> tab, or press <code className="font-mono">Ctrl+Shift+L</code> / <code className="font-mono">Ctrl+Shift+V</code>.
+                      </div>
+                      <div>
+                        <strong>Not visible yet?</strong> Press <code className="font-mono">Alt + F8</code>, type <code className="font-mono">StatSheet_SPSS.Auto_Open</code>, and click <strong>Run</strong> (or ensure macros are not set to &ldquo;Disable all macros without notification&rdquo; in Trust Center).
+                      </div>
                     </div>
                   </div>
                 ) : (

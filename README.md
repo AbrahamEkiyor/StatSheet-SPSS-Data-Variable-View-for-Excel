@@ -9,8 +9,8 @@
 - **SPSS Data View**
   - High-density spreadsheet grid with sticky case numbers, variable headers (with `Scale` / `Ordinal` / `Nominal` measure icons), and an active-cell inspector displaying both raw numeric code and resolved label.
   - Inline editing with automatic searchable dropdowns when Value Labels are active, plus undo/redo history (`40` steps), row insertion/deletion, live search, and validation-issue filtering.
-- **Full 11-Column SPSS Variable View**
-  - Inline editing for **Name**, **Type** (`Numeric`, `Comma`, `Dot`, `Scientific`, `Date`, `Dollar`, `Custom Currency`, `String`), **Width**, **Decimals**, **Label**, **Values**, **Missing**, **Columns**, **Align**, **Measure** (`Scale`, `Ordinal`, `Nominal`), and **Role** (`Input`, `Target`, `Both`, `None`, `Partition`, `Split`).
+- **Full 11-Column SPSS Variable View (+ Class Bins)**
+  - Inline editing for **Name**, **Type** (`Numeric`, `Comma`, `Dot`, `Scientific`, `Date`, `Dollar`, `Custom Currency`, `String`), **Width**, **Decimals**, **Label**, **Values**, **Missing**, **Class Bins**, **Columns**, **Align**, **Measure** (`Scale`, `Ordinal`, `Nominal`), and **Role** (`Input`, `Target`, `Both`, `None`, `Partition`, `Split`).
   - Built-in SPSS variable-naming validation, atomic column renaming across all cases, row reordering, and variable duplication.
 - **Reversible Value Labels Toggle (`1 ↔ A`)**
   - Switch spreadsheets seamlessly between raw codes (`1`, `2`, `-9`) and human-readable text labels (`Strongly Disagree`, `Disagree`, `Skipped Question`).
@@ -20,11 +20,16 @@
 - **Missing Values & Data Validation**
   - Configure SPSS discrete missing codes (up to 3 values) or numeric missing ranges (`low thru high`).
   - Enforce numeric `Min`/`Max` bounds, required-field checks, and **Restrict to defined Value Labels** (which also generates native Excel in-cell dropdown validation on sync).
-- **Quick Descriptives & Frequency Counts**
-  - Slide-over inspector calculating **Total N**, **Valid N**, **User-Missing N**, **System-Missing N**, **Mean**, **Median**, **Std. Dev.**, **Min**, **Max**, and full **Frequency Distribution** tables (`Frequency`, `Percent`, `Valid %`, `Cumulative %`) excluding missing codes.
+- **Scale Class Boundaries & Reusable Binning Templates**
+  - Group continuous numeric/scale variables via **Equal Count**, **Fixed Width** (with optional start bound & nice rounded cutpoints), or **Custom Intervals** (with open-ended `−∞` / `+∞` bounds, custom labels, and live overlap/gap validation).
+  - Configurable endpoint inclusion rule: **Lower-inclusive `[a, b)`** (default) or **Upper-inclusive `(a, b]`**.
+  - Check **Remember these binning settings** to persist the interval configuration in browser `localStorage` and apply the saved template to other variables in one click.
+  - **Recode into New Variable** generates a coded **Ordinal** column (`1, 2, …`) with matching Value Labels and preserved user-missing codes.
+- **Descriptives & Grouped Frequency Distributions**
+  - Slide-over inspector calculating **Total N**, **Valid N**, **User-Missing N**, **System-Missing N**, **Mean**, **Median**, **Std. Dev.**, **Min**, **Max**, and both **Ungrouped** and **Grouped Class Interval** frequency tables (with **Midpoint**, `Frequency`, `Percent`, `Valid %`, `Cumulative %`) excluding missing codes.
 - **Codebooks & Workbook Portability**
-  - Import and export `.xlsx` and `.csv` workbooks via SheetJS (preserving hidden `_SPSS_RawBackup` and `_SPSS_Metadata` sheets on `.xlsx` round-trips).
-  - Export and import portable **JSON Codebooks** (`statsheet-codebook-v1`) and **CSV Data Dictionaries**.
+  - Import and export `.xlsx` and `.csv` workbooks via SheetJS (preserving hidden `_SPSS_RawBackup` and `_SPSS_Metadata` sheets, including `ClassBinsJSON`, on `.xlsx` round-trips).
+  - Export and import portable **JSON Codebooks** (`statsheet-codebook-v1`) and **CSV Data Dictionaries** (including class boundary definitions).
 - **Built-in Sample Datasets & Task Pane Preview**
   - Includes an *Employee Engagement Survey (N=24)* and *Cardiology Clinical Trial (N=12)* dataset out of the box, plus a **Task Pane Preview** (`420px`) toggle to test narrow Excel side-pane ergonomics.
 
@@ -79,9 +84,12 @@ The **Offline VBA Add-in** runs purely in cross-platform Excel VBA (`StatSheet_S
 
 ### Option A — Automated Windows Installer (`.ps1`)
 1. Save `StatSheet_SPSS.bas` and `Build_StatSheet_xlam.ps1` in the same folder.
-2. Right-click `Build_StatSheet_xlam.ps1` → **Run with PowerShell**.
+2. Open PowerShell in that folder and run:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\Build_StatSheet_xlam.ps1
+   ```
    *(Requires `File → Options → Trust Center → Trust Center Settings → Macro Settings → Trust access to the VBA project object model` to be checked once).*
-3. The script compiles and enables `%APPDATA%\Microsoft\AddIns\StatSheet_SPSS.xlam` automatically.
+3. The script builds `%APPDATA%\Microsoft\AddIns\StatSheet_SPSS.xlam`, embeds the custom **`SPSS View`** Ribbon tab (`customUI14.xml`), and enables the add-in automatically.
 
 ### Option B — Manual Import (Windows & macOS, 30 Seconds)
 1. Open a blank workbook in Excel and open the VBA Editor (`Alt + F11` on Windows, `Option + F11` on macOS).
@@ -91,11 +99,12 @@ The **Offline VBA Add-in** runs purely in cross-platform Excel VBA (`StatSheet_S
    - **Windows**: **File → Options → Add-ins → Manage: Excel Add-ins → Go…** → check `StatSheet_SPSS`.
    - **macOS**: **Tools → Excel Add-ins…** → check `StatSheet_SPSS`.
 
-### Offline VBA Shortcuts & Menu Commands
-Once enabled, StatSheet adds an **Add-ins → StatSheet SPSS** menu and registers two global shortcuts:
-- `Ctrl + Shift + L` — **Toggle Value Labels (`1 ↔ A`)** reversibly (preserving edits made in either mode).
+### Offline VBA Ribbon, Shortcuts & Menu Commands
+Once enabled, StatSheet adds a native **`SPSS View`** Ribbon tab (via Option A), a **StatSheet SPSS** submenu when right-clicking any cell, an **Add-ins → StatSheet SPSS** menu, and two global shortcuts:
+- `Ctrl + Shift + L` — **Toggle Value Labels (`1 ↔ A`)** reversibly (includes an option to suppress repeat confirmation pop-ups while keeping status-bar updates).
 - `Ctrl + Shift + V` — **Switch between Data View and `Variable_View`**.
-- Additional menu actions: **Sync / Initialize `Variable_View`**, **Edit Value Labels for Selection**, **Validate Rules & Flag Missing Values**, **Clear Validation Highlights**, **Descriptives & Frequencies Report**, and **Export Codebook (`.json`)**.
+- **Class Boundaries & Grouped Stats**: **Define Class Boundaries (Scale)** (`AUTO:k`, `WIDTH:w@start`, or custom intervals with `[a, b)` / `(a, b]` rule stored in `Variable_View` column `O`), **Descriptives & Frequencies Report** (with automatic grouped interval + Midpoint + Cumulative % output), and **Recode Binned Variable** (creates a coded Ordinal column with Value Labels).
+- Additional menu/Ribbon actions: **Sync / Initialize `Variable_View`**, **Edit Value Labels for Selection**, **Validate Rules & Flag Missing Values**, **Clear Validation Highlights**, **Export Codebook (`.json`)**, and **Toggle Pop-up Confirmations (On/Off)**.
 
 ---
 
@@ -119,11 +128,11 @@ To prevent Value Labels from destroying numeric formulas or underlying codes, St
 | Sheet Name | Visibility | Purpose |
 | :--- | :--- | :--- |
 | `Data` *(or active sheet)* | Visible | Primary case-by-variable spreadsheet view (raw codes or toggled Value Labels) |
-| `Variable_View` *(VBA mode)* | Visible | 11-column SPSS variable definitions plus `Val_Min`, `Val_Max`, `Restrict_Labels` |
+| `Variable_View` *(VBA mode)* | Visible | 11-column SPSS variable definitions plus `Val_Min`, `Val_Max`, `Restrict_Labels`, and `Class_Bins` |
 | `_SPSS_RawBackup` | Hidden (`xlSheetVeryHidden`) | Snapshot of exact raw numeric/text codes before applying Value Labels |
-| `_SPSS_Metadata` | Hidden (`xlSheetVeryHidden`) | Serialized Variable View schema, value labels, missing rules, and validation bounds |
+| `_SPSS_Metadata` | Hidden (`xlSheetVeryHidden`) | Serialized Variable View schema, value labels, missing rules, validation bounds, and `ClassBinsJSON` |
 | `_SPSS_State` *(VBA mode)* | Hidden (`xlSheetVeryHidden`) | Tracks active `RAW`/`LABELS` display mode and target data sheet name |
-| `_SPSS_Output` *(VBA mode)* | Visible on run | Generated Descriptive Statistics & Frequency Distribution report |
+| `_SPSS_Output` *(VBA mode)* | Visible on run | Generated Descriptive Statistics & Ungrouped / Grouped Frequency Distribution report |
 
 ---
 
@@ -152,7 +161,8 @@ To prevent Value Labels from destroying numeric formulas or underlying codes, St
         ├── BottomViewTabs.tsx        # Classic Data View / Variable View sheet switcher
         ├── ValueLabelsModal.tsx      # Code-to-label editor, presets, copy, and bulk paste
         ├── MissingAndValidationModal.tsx # Missing value rules and numeric/label validation bounds
-        ├── StatsInspectorDrawer.tsx  # Slide-over Descriptives & Frequency Distribution inspector
+        ├── ClassBoundariesModal.tsx  # Equal-width & custom class intervals, templates, and recoding
+        ├── StatsInspectorDrawer.tsx  # Slide-over Descriptives & Ungrouped/Grouped Frequency inspector
         ├── CodebookModal.tsx         # JSON Codebook & CSV Data Dictionary import/export
         ├── ExcelAddinModal.tsx       # Offline VBA (.xlam) & Office.js manifest.xml installer hub
         └── MeasureIcon.tsx           # SPSS Scale, Ordinal, and Nominal SVG icons

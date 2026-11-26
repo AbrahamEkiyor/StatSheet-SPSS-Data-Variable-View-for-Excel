@@ -11,6 +11,7 @@ import {
   syncToLiveExcel,
 } from './bridge/workbookBridge';
 import { BottomViewTabs } from './components/BottomViewTabs';
+import { ClassBoundariesModal } from './components/ClassBoundariesModal';
 import { CodebookModal } from './components/CodebookModal';
 import { DataViewGrid } from './components/DataViewGrid';
 import { ExcelAddinModal } from './components/ExcelAddinModal';
@@ -21,10 +22,15 @@ import { TopBar } from './components/TopBar';
 import { ValueLabelsModal } from './components/ValueLabelsModal';
 import { VariableViewGrid } from './components/VariableViewGrid';
 import { EMPLOYEE_SURVEY_DATASET, SAMPLE_PRESETS } from './data/sampleDatasets';
-import { sanitizeVariableName, validateDataset } from './engine/spssEngine';
+import {
+  buildRecodedVariableAndRows,
+  sanitizeVariableName,
+  validateDataset,
+} from './engine/spssEngine';
 import type {
   ActiveSheetView,
   CellValue,
+  ClassBinSpec,
   DatasetState,
   HostEnvironment,
   MissingValueSpec,
@@ -62,6 +68,7 @@ export default function App() {
   // Modals & Drawers
   const [valueLabelsVarId, setValueLabelsVarId] = useState<string | null>(null);
   const [missingVarId, setMissingVarId] = useState<string | null>(null);
+  const [classBinsVarId, setClassBinsVarId] = useState<string | null>(null);
   const [statsVarId, setStatsVarId] = useState<string | null>(null);
   const [showCodebookModal, setShowCodebookModal] = useState(false);
   const [showAddinModal, setShowAddinModal] = useState(false);
@@ -382,6 +389,7 @@ export default function App() {
           : undefined,
       },
       validation: source.validation ? { ...source.validation } : undefined,
+      classBins: source.classBins ? structuredClone(source.classBins) : undefined,
     };
     commitDataset((prev) => ({
       ...prev,
@@ -437,6 +445,54 @@ export default function App() {
   ) => {
     handleUpdateVariable(variableId, { missingValues, validation });
     pushToast('success', 'Missing values & validation rules updated');
+  };
+
+  const handleSaveClassBins = (
+    variableId: string,
+    classBins: ClassBinSpec | undefined
+  ) => {
+    handleUpdateVariable(variableId, { classBins });
+    pushToast(
+      'success',
+      classBins?.enabled
+        ? `Saved ${classBins.intervals.length} class intervals`
+        : 'Class boundaries cleared'
+    );
+  };
+
+  const handleRecodeFromBins = (
+    sourceVarId: string,
+    targetName: string,
+    spec: ClassBinSpec
+  ) => {
+    const sourceVar = dataset.variables.find((v) => v.id === sourceVarId);
+    if (!sourceVar) return;
+    const { newVariable, updatedRows } = buildRecodedVariableAndRows(
+      sourceVar,
+      targetName,
+      spec,
+      dataset.rows
+    );
+    commitDataset((prev) => {
+      const idx = prev.variables.findIndex((v) => v.id === sourceVarId);
+      const nextVars = [...prev.variables];
+      if (idx >= 0) {
+        nextVars.splice(idx + 1, 0, newVariable);
+      } else {
+        nextVars.push(newVariable);
+      }
+      return {
+        ...prev,
+        variables: nextVars,
+        rows: updatedRows,
+      };
+    });
+    setSelectedVariableId(newVariable.id);
+    pushToast(
+      'success',
+      `Created ordinal variable "${newVariable.name}"`,
+      `${spec.intervals.length} coded categories with Value Labels & preserved missing codes.`
+    );
   };
 
   const handleLoadPreset = (presetId: string) => {
@@ -505,6 +561,7 @@ export default function App() {
           measure: match.measure,
           role: match.role,
           validation: match.validation ?? v.validation,
+          classBins: match.classBins ?? v.classBins,
         };
       });
       return { ...prev, variables: mergedVars };
@@ -530,6 +587,9 @@ export default function App() {
     : null;
   const missingTarget = missingVarId
     ? dataset.variables.find((v) => v.id === missingVarId) ?? null
+    : null;
+  const classBinsTarget = classBinsVarId
+    ? dataset.variables.find((v) => v.id === classBinsVarId) ?? null
     : null;
 
   return (
@@ -629,6 +689,7 @@ export default function App() {
               onDeleteVariable={handleDeleteVariable}
               onOpenValueLabels={(varId) => setValueLabelsVarId(varId)}
               onOpenMissingModal={(varId) => setMissingVarId(varId)}
+              onOpenClassBins={(varId) => setClassBinsVarId(varId)}
               onOpenStats={(varId) => setStatsVarId(varId)}
             />
           )}
@@ -663,12 +724,25 @@ export default function App() {
         />
       )}
 
+      {classBinsTarget && (
+        <ClassBoundariesModal
+          variable={classBinsTarget}
+          rows={dataset.rows}
+          existingNames={dataset.variables.map((v) => v.name)}
+          onSave={handleSaveClassBins}
+          onRecodeVariable={handleRecodeFromBins}
+          onClose={() => setClassBinsVarId(null)}
+        />
+      )}
+
       {statsVarId && (
         <StatsInspectorDrawer
           variables={dataset.variables}
           rows={dataset.rows}
           selectedVariableId={statsVarId}
           onSelectVariable={setStatsVarId}
+          onOpenClassBins={(varId) => setClassBinsVarId(varId)}
+          onRecodeVariable={handleRecodeFromBins}
           onClose={() => setStatsVarId(null)}
         />
       )}

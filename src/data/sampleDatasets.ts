@@ -142,6 +142,19 @@ export const EMPLOYEE_SURVEY_DATASET: DatasetState = {
       measure: 'scale',
       role: 'input',
       validation: { min: 35000, max: 450000 },
+      classBins: {
+        enabled: true,
+        mode: 'auto_width',
+        endpointRule: 'lower_inclusive',
+        binWidth: 25000,
+        startAt: 75000,
+        intervals: [
+          { id: 'b1', lower: 75000, upper: 100000, label: '$75,000 – <$100,000' },
+          { id: 'b2', lower: 100000, upper: 125000, label: '$100,000 – <$125,000' },
+          { id: 'b3', lower: 125000, upper: 150000, label: '$125,000 – <$150,000' },
+          { id: 'b4', lower: 150000, upper: 175000, label: '$150,000 – $175,000' },
+        ],
+      },
     },
     {
       id: 'var_weekly_hrs',

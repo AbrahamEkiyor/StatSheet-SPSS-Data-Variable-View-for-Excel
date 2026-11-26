@@ -38,6 +38,27 @@ export interface ValidationRuleSpec {
   required?: boolean;
 }
 
+export type EndpointInclusionRule = 'lower_inclusive' | 'upper_inclusive';
+
+export type ClassBinMode = 'auto_count' | 'auto_width' | 'custom';
+
+export interface ClassInterval {
+  id: string;
+  lower: number | null;
+  upper: number | null;
+  label: string;
+}
+
+export interface ClassBinSpec {
+  enabled: boolean;
+  mode: ClassBinMode;
+  endpointRule: EndpointInclusionRule;
+  binCount?: number;
+  binWidth?: number;
+  startAt?: number;
+  intervals: ClassInterval[];
+}
+
 export interface VariableDefinition {
   id: string;
   name: string;
@@ -52,6 +73,7 @@ export interface VariableDefinition {
   measure: VariableMeasure;
   role: VariableRole;
   validation?: ValidationRuleSpec;
+  classBins?: ClassBinSpec;
 }
 
 export type CellValue = string | number | null;
@@ -96,6 +118,8 @@ export interface FrequencyRow {
   percent: number;
   validPercent: number | null;
   cumulativePercent: number | null;
+  midpoint?: number | null;
+  intervalId?: string;
 }
 
 export interface VariableStats {
