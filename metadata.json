@@ -1,0 +1,6 @@
+{
+  "name": "StatSheet — SPSS Data & Variable View for Excel",
+  "description": "An Excel Add-in and interactive spreadsheet workspace that brings SPSS Data View, 11-column Variable View, reversible Value Labels toggle, missing values, validation rules, codebooks, and descriptive statistics to spreadsheets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
